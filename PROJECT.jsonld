@@ -1,0 +1,26 @@
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareSourceCode",
+  "name": "etzhayyim-project-public-fund",
+  "description": "Crowdfunding-style public fund app on pb.etzhayyim.com where any user can launch funds, with COFOG/ISIC/APQC gRPC workflows and credits.etzhayyim.com-based accounting.",
+  "programmingLanguage": [
+    "Go",
+    "Protocol Buffers"
+  ],
+  "runtimePlatform": "SpinKube",
+  "url": "https://pb.etzhayyim.com",
+  "keywords": [
+    "cofog",
+    "crowdfunding",
+    "public fund",
+    "credits.etzhayyim.com",
+    "isic",
+    "apqc",
+    "grpc",
+    "connectrpc"
+  ],
+  "isPartOf": {
+    "@type": "SoftwareApplication",
+    "name": "etzhayyim.com"
+  }
+}
