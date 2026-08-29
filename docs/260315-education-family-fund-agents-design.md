@@ -117,7 +117,7 @@
 
 ## 5. Agent Integration with Public Fund Flow (Matrix Conversation)
 
-全フローは Matrix room/thread 上の会話として実行。Cross-project 設計の権威ソースは `90-docs/260315-cross-project-matrix-conversation-design.md`。
+全フローは Matrix room/thread 上の会話として実行。Cross-project 設計の権威ソースは `docs/260315-cross-project-matrix-conversation-design.md`。
 
 ```
 Fund Campaign 起案 (in !team-pb-edu-{nanoid})
