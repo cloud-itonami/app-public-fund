@@ -242,6 +242,16 @@
 (def ^:private not-a-host-ext
   #{"md" "ts" "edn" "json" "jsonld" "cljs" "cljc" "go" "proto" "yml" "yaml" "html"})
 
+(defn- strip-fences
+  "Drops ``` fenced blocks. Illustrative commands are not dependency declarations.
+
+   Uses [\\s\\S] rather than (?s). JavaScript has no inline DOTALL group, so
+   #\"(?s)```.*?```\" compiles to a regex that matches nothing across newlines and
+   returns the input unchanged — a strip that silently does nothing looks exactly
+   like a document with no fenced blocks in it."
+  [text]
+  (str/replace text #"```[\s\S]*?```" ""))
+
 (def ^:private hostname-shape #"^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$")
 
 (defn- host-candidates
@@ -265,9 +275,15 @@
                       (str/starts-with? h "com.")
                       (contains? not-a-host-ext (last (str/split h #"\."))))))
         (concat
+          ;; A URL names a host wherever it appears, including inside an example.
           (map second (re-seq #"https?://([a-z0-9.-]+)" text))
+          ;; A backticked bare name only counts outside fenced blocks. Fenced
+          ;; blocks hold commands, and the quickstart's own negative control
+          ;; contains a literal `nonexistent-host.example.com` — scanning it
+          ;; made that control report a find whether or not the step had run,
+          ;; which is the control passing for the wrong reason.
           (filter #(re-find hostname-shape %)
-                  (map second (re-seq #"`([^`\n]+)`" text))))))
+                  (map second (re-seq #"`([^`\n]+)`" (strip-fences text)))))))
 
 (defn run-preflight [files]
   (let [text (str (str/join "\n" (keep slurp* (filter #(str/ends-with? % ".md") files)))
