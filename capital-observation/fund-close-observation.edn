@@ -1,0 +1,143 @@
+;; fund-close-observation.edn — bounded actor contract for observing
+;; PUBLIC fund closes (the public-fund app's own domain: fund campaigns,
+;; eligibility-conditioned closes and credit disbursements), proposed to
+;; Hyakka (network-awai/app-hyakka) as auditable questions, not as a score.
+;;
+;; Scope guard: this contract observes the app-public-fund campaign plane
+;; only. It does NOT rank funds, GPs, LPs or startups, does not infer
+;; ownership or personal wealth, and produces no investment advice. Every
+;; derived observation below is an "observed claim" record that a reader
+;; can trace back to a source receipt by hash.
+;;
+;; Method version: v1 (2026-08-30). Any change to field semantics bumps
+;; :method/version and appends a :refresh/history entry; old observations
+;; are never silently reinterpreted.
+
+{:contract/id :fund-close-observation
+ :contract/version "1.0.0"
+ :method/version "fund-close-observation.v1"
+ :actor :cloud-itonami/app-public-fund
+ :proposes-to :network-awai/app-hyakka
+
+ ;; ── Measurement window ─────────────────────────────────────────────
+ ;; Observations are time-bounded. A window is a half-open interval
+ ;; [from, until) in UTC ISO-8601 dates. "missing" inside a window means
+ ;; "not measured in this window", never "nothing happened".
+ :window
+ {:schema [:from :until :declared-at :timezone]
+  :format "YYYY-MM-DD"
+  :closed? false                       ; [from, until)
+  :rule :window-must-not-overlap-within-same-source-and-method}
+
+ ;; ── Source receipts ────────────────────────────────────────────────
+ ;; Every observation cites exactly one receipt. Receipts are captured
+ ;; verbatim (bytes hash + fetch metadata) before any parsing.
+ :source-receipt
+ {:schema [:receipt-id :source-url :source-class :source-language
+           :observed-at :content-hash :fetch-status]
+  :content-hash {:algo "sha256" :of "response-body-bytes"}
+  :source-class-allow #{:official-regulator :official-stock-exchange-filing
+                        :official-company-registry :fund-first-party
+                        :manager-first-party :institutional-lp-first-party
+                        :official-board-record}
+  :source-class-forbid #{:search-snippet :generated-summary :scraped-directory
+                         :social-post :broker-list :paywall-bypass
+                         :captcha-bypass}
+  ;; news-report and licensed-commercial-aggregator may be carried as
+  ;; discovery-only pointers; they can never back a derived observation.
+  :source-class-discovery-only #{:news-report :licensed-commercial-aggregator}
+  :fetch {:respect-robots? true :respect-auth-waf-captcha? true
+          :user-agent "app-public-fund-capital-observation/1.0"}}
+
+ ;; ── Typed entity/event inputs ──────────────────────────────────────
+ ;; Entity separation is a hard invariant: a venture firm, a fund vehicle
+ ;; and a general partner are distinct entities even when they share a
+ ;; brand name (brand-is-not-legal-entity).
+ :entity-types #{:public-fund :fund-vehicle :management-company
+                 :general-partner :limited-partner :jurisdiction}
+ :event-types #{:fund-announced :fund-first-close :fund-final-close
+                :disbursement-executed :fund-closed-out}
+ :entity-record
+ {:schema [:entity-id :entity-type :name :legal-name :jurisdiction
+           :identifier-class :identifier-value :source-receipt-id
+           :asserted-at :observed-at]
+  :invariant :one-entity-type-per-entity-id
+  :note "A brand string never auto-creates a legal entity."}
+ :event-record
+ {:schema [:event-id :event-type :entity-id :announced-at :asserted-at
+           :amount {:kind [:one-of :stated-target :stated-first-close
+                    :stated-final-close :disbursed-credits]
+                    :currency :string
+                    :as-stated-by-source? true}
+           :source-receipt-id]
+  ;; announced-target-is-not-closed-fund-size;
+  ;; announced-round-is-not-cash-received.
+  :invariant :amount-kind-is-carried-not-collapsed}
+
+ ;; ── Missingness / coverage flags ───────────────────────────────────
+ :missingness
+ {:flags #{:no-receipt :receipt-unparseable :amount-not-stated
+           :close-kind-unstated :jurisdiction-unstated
+           :source-language-unmapped}
+  :rule :missing-is-unmeasured
+  :coverage-unit [:jurisdiction :source :language :year :industry :stage
+                  :identifier-class]
+  :coverage-record
+  {:schema [:coverage-unit :unit-key :observed-count :unmeasured-count
+            :window :method/version]}}
+
+ ;; ── Derived observation ────────────────────────────────────────────
+ ;; The only derived artifact is an observation of closes within a
+ ;; window. No ranking, scoring, centrality or suitability field exists
+ ;; in this shape by construction.
+ :derived-observation
+ {:schema [:observation-id :method/version :window
+           :observation-kind :entity-id :event-id
+           :value {:kind [:one-of :close-count :disbursement-count
+                    :stated-amount-observation]
+                   :basis #{:receipt-only}}
+           :missingness-flags :provenance-chain
+           :asserted-at]
+  :observation-kinds #{:fund-close-in-window :disbursement-in-window
+                       :stated-amount-in-window}
+  :forbidden-fields #{:rank :score :centrality :nav :ownership-stake
+                      :suitability :recommendation :current-valuation}}
+
+ ;; ── Refresh history ────────────────────────────────────────────────
+ ;; Append-only. A re-observation of the same entity/window with a newer
+ ;; method version appends; it never edits prior entries.
+ :refresh-history
+ {:schema [:history-id :observation-id :re-observed-at
+           :reason {:kind [:one-of :window-advanced :source-updated
+                     :method-version-bumped]}
+           :changed-fields]
+  :append-only? true}
+
+ ;; ── Hyakka proposal ────────────────────────────────────────────────
+ ;; What is proposed to Hyakka is a set of auditable QUESTIONS over the
+ ;; observation records, e.g. "how many fund-first-close events were
+ ;; observed with receipts in jurisdiction J within window W?" — each
+ ;; question carries its own coverage/missingness statement.
+ :hyakka-proposal
+ {:schema [:proposal-id :question-text :over-observation-kind
+           :window :coverage-record-ref :missingness-flags
+           :disclaimer]
+  :disclaimer
+  "Observations only. Not performance, ownership, endorsement or
+   investment suitability. No investment advice."}
+
+ ;; ── Query / readback shape ─────────────────────────────────────────
+ ;; Deterministic readback: a question id + window returns observations
+ ;; plus the exact coverage statement that bounds them, or an explicit
+ ;; :unmeasured response. Unknown keys are rejected, not ignored.
+ :query-readback
+ {:request-schema [:query-id :observation-kind :window
+                   :filter {:keys #{:jurisdiction :entity-type
+                                    :amount-kind}}]
+  :response-schema [:query-id :status
+                    :observations [:observation-id]
+                    :coverage-record-ref
+                    :missingness-flags]
+  :status-values #{:ok :unmeasured :out-of-window}
+  :rule :readback-must-carry-coverage-and-missingness}}
+
