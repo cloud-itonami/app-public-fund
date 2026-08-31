@@ -1,0 +1,155 @@
+;; lp-commitment-observation.edn — bounded actor contract for observing
+;; PUBLIC LP (limited partner) commitments to funds with provenance,
+;; proposed to Hyakka (network-awai/app-hyakka) as auditable questions,
+;; not as a score.
+;;
+;; Scope guard: this contract observes commitments AS STATED by allowed
+;; sources (institutional LP first-party disclosures, fund first-party
+;; filings, official regulator / securities filings). It does NOT infer
+;; LPs from portfolio pages, news or aggregators (:inferred-lp is a
+;; forbidden source class), does not convert a commitment into current
+;; NAV, ownership or personal wealth (lp-commitment-is-not-current-nav-
+;; or-ownership), and produces no investment advice. Every derived
+;; observation traces back to a source receipt by hash.
+;;
+;; Method version: v1 (2026-09-01). Any change to field semantics bumps
+;; :method/version and appends a :refresh/history entry; old observations
+;; are never silently reinterpreted.
+
+{:contract/id :lp-commitment-observation
+ :contract/version "1.0.0"
+ :method/version "lp-commitment-observation.v1"
+ :actor :cloud-itonami/app-public-fund
+ :proposes-to :network-awai/app-hyakka
+
+ ;; ── Measurement window ─────────────────────────────────────────────
+ ;; Half-open interval [from, until) in UTC ISO-8601 dates. "missing"
+ ;; inside a window means "not measured in this window", never "nothing
+ ;; happened".
+ :window
+ {:schema [:from :until :declared-at :timezone]
+  :format "YYYY-MM-DD"
+  :closed? false                       ; [from, until)
+  :rule :window-must-not-overlap-within-same-source-and-method}
+
+ ;; ── Source receipts ────────────────────────────────────────────────
+ ;; Every observation cites exactly one receipt. Receipts are captured
+ ;; verbatim (bytes hash + fetch metadata) before any parsing.
+ :source-receipt
+ {:schema [:receipt-id :source-url :source-class :source-language
+           :observed-at :content-hash :fetch-status]
+  :content-hash {:algo "sha256" :of "response-body-bytes"}
+  :source-class-allow #{:official-regulator :official-securities-filing
+                        :official-company-registry :fund-first-party
+                        :manager-first-party :institutional-lp-first-party}
+  :source-class-forbid #{:search-snippet :generated-summary :scraped-directory
+                         :social-post :broker-list :paywall-bypass
+                         :captcha-bypass :inferred-lp :inferred-ownership
+                         :inferred-personal-wealth}
+  ;; news-report and licensed-commercial-aggregator may be carried as
+  ;; discovery-only pointers; they can NEVER back a derived observation
+  ;; (an LP named only by news is :inferred-lp, i.e. unmeasured here).
+  :source-class-discovery-only #{:news-report :licensed-commercial-aggregator}
+  :fetch {:respect-robots? true :respect-auth-waf-captcha? true
+          :user-agent "app-public-fund-capital-observation/1.0"}}
+
+ ;; ── Typed entity/event inputs ──────────────────────────────────────
+ ;; Entity separation is a hard invariant: the limited partner as a
+ ;; capital vehicle, the LP's management organization, the fund vehicle
+ ;; and the general partner are distinct entities even when they share a
+ ;; brand name (brand-is-not-legal-entity; gp-is-not-management-company-
+ ;; without-source).
+ :entity-types #{:limited-partner :investment-fund :fund-vehicle
+                 :management-company :general-partner :jurisdiction}
+ :event-types #{:commitment-announced :commitment-amended
+                :commitment-redeemed-as-stated}
+ :entity-record
+ {:schema [:entity-id :entity-type :name :legal-name :jurisdiction
+           :identifier-class :identifier-value :source-receipt-id
+           :asserted-at :observed-at]
+  :invariant :one-entity-type-per-entity-id
+  :note "A brand string never auto-creates a legal entity."}
+ :event-record
+ {:schema [:event-id :event-type :lp-entity-id :fund-entity-id
+           :announced-at :asserted-at
+           :amount {:kind [:one-of :stated-commitment
+                           :stated-commitment-amendment
+                           :stated-redemption]
+                    :currency :string
+                    :as-stated-by-source? true}
+           :source-receipt-id]
+  ;; lp-commitment-is-not-current-nav-or-ownership: a commitment amount
+  ;; is a stated capital pledge, never a NAV, valuation or ownership
+  ;; stake. Kinds are carried, not collapsed. LP and fund must be
+  ;; distinct entity ids.
+  :invariants #{:commitment-kind-is-carried-not-collapsed
+                :lp-and-fund-are-distinct-entity-ids}}
+
+ ;; ── Missingness / coverage flags ───────────────────────────────────
+ :missingness
+ {:flags #{:no-receipt :receipt-unparseable :amount-not-stated
+           :currency-unstated :jurisdiction-unstated
+           :lp-entity-unresolvable :fund-entity-unresolvable
+           :source-language-unmapped}
+  :rule :missing-is-unmeasured
+  :coverage-unit [:jurisdiction :source :language :year :stage
+                  :identifier-class]
+  :coverage-record
+  {:schema [:coverage-unit :unit-key :observed-count :unmeasured-count
+            :window :method/version]}}
+
+ ;; ── Derived observation ────────────────────────────────────────────
+ ;; The only derived artifact is an observation of commitments within a
+ ;; window. No ranking, scoring, centrality, NAV, ownership or suitability
+ ;; field exists in this shape by construction.
+ :derived-observation
+ {:schema [:observation-id :method/version :window
+           :observation-kind :lp-entity-id :fund-entity-id :event-id
+           :value {:kind [:one-of :commitment-count :stated-amount-observation]
+                   :basis #{:receipt-only}}
+           :missingness-flags :provenance-chain
+           :asserted-at]
+  :observation-kinds #{:lp-commitment-in-window :commitment-amendment-in-window
+                       :stated-redemption-in-window :stated-amount-in-window}
+  :forbidden-fields #{:rank :score :centrality :nav :ownership-stake
+                      :suitability :recommendation :current-valuation
+                      :personal-wealth}}
+
+ ;; ── Refresh history ────────────────────────────────────────────────
+ ;; Append-only. A re-observation of the same entity/window with a newer
+ ;; method version appends; it never edits prior entries.
+ :refresh-history
+ {:schema [:history-id :observation-id :re-observed-at
+           :reason {:kind [:one-of :window-advanced :source-updated
+                           :method-version-bumped]}
+           :changed-fields]
+  :append-only? true}
+
+ ;; ── Hyakka proposal ────────────────────────────────────────────────
+ ;; Auditable QUESTIONS over the observation records, e.g. "how many
+ ;; stated commitments to fund F by institutional LPs were observed with
+ ;; receipts in jurisdiction J within window W?" — each question carries
+ ;; its own coverage/missingness statement.
+ :hyakka-proposal
+ {:schema [:proposal-id :question-text :over-observation-kind
+           :window :coverage-record-ref :missingness-flags
+           :disclaimer]
+  :disclaimer
+  "Observations only. Not performance, ownership, endorsement or
+   investment suitability. A stated commitment is not current NAV,
+   valuation or ownership. No investment advice."}
+
+ ;; ── Query / readback shape ─────────────────────────────────────────
+ ;; Deterministic readback: a question id + window returns observations
+ ;; plus the exact coverage statement that bounds them, or an explicit
+ ;; :unmeasured response. Unknown keys are rejected, not ignored.
+ :query-readback
+ {:request-schema [:query-id :observation-kind :window
+                   :filter {:keys #{:jurisdiction :lp-entity-type
+                                    :amount-kind}}]
+  :response-schema [:query-id :status
+                    :observations [:observation-id]
+                    :coverage-record-ref
+                    :missingness-flags]
+  :status-values #{:ok :unmeasured :out-of-window}
+  :rule :readback-must-carry-coverage-and-missingness}}
