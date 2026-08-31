@@ -1,10 +1,10 @@
-# Fund-close observation contract (proposed to Hyakka)
+# Capital observation contracts (proposed to Hyakka)
 
-`fund-close-observation.edn` is a bounded actor contract for observing
-**public fund** closes and disbursements with provenance, proposed to
-`network-awai/app-hyakka` as auditable questions.
+Bounded actor contracts in this directory observe public capital-market
+surface with provenance, and propose results to `network-awai/app-hyakka`
+as auditable questions — never as scores, rankings or advice.
 
-What it is:
+## fund-close-observation.edn
 
 - A machine-readable contract covering source receipts (sha256 of verbatim
   bytes), typed entity/event inputs with hard entity separation (a venture
@@ -41,6 +41,19 @@ What it is not:
   close vs final close) and are never collapsed.
 
 Verify deterministically (offline, no network):
+`fund-close-observation.v1` — observes **public fund** closes and
+disbursements. Covers source receipts (sha256 of verbatim bytes), typed
+entity/event inputs with hard entity separation (a venture firm, a fund
+vehicle and a GP are distinct entities even under one brand), time-bounded
+measurement windows (`[from, until)`), missingness/coverage flags
+(`missing-is-unmeasured`), derived observations that structurally exclude
+rank/score/centrality/ownership/suitability fields, an append-only refresh
+history, a Hyakka proposal shape (questions only, never advice), and a
+deterministic query/readback shape that always carries coverage +
+missingness.
+
+Amounts are carried with their stated kind (target vs first close vs final
+close) and are never collapsed.
 
 ```bash
 nbb tools/capital_observation_fixtures.cljs
@@ -199,3 +212,37 @@ Verify deterministically (offline, no network):
 ```bash
 nbb tools/manager_affiliation_fixtures.cljs
 ```
+## financing-round-observation.edn
+
+`financing-round-observation.v1` — observes **announced startup financing
+rounds** (pre-seed through growth). Same receipt/window/missingness/
+readback skeleton as the fund-close contract, with round-specific
+epistemic boundaries enforced by construction:
+
+- `announced-round-is-not-cash-received` — amount kinds (`:stated-round-size`,
+  `:stated-raise`, `:stated-post-money-valuation-claim`) are carried, not
+  collapsed; a valuation *claim* is never a verified valuation
+  (`:verified-valuation` is a forbidden field).
+- `lead-investor-is-not-board-control` — participant roles (`:lead`,
+  `:co-investor`, `:existing-investor`) are observed claims bound to a
+  receipt, not control or ownership facts.
+- `brand-is-not-legal-entity` — a company, a venture firm and a fund
+  vehicle sharing a brand string stay distinct entity ids.
+- `news-report-is-not-an-issuer-or-regulator-filing` — news reports and
+  commercial aggregators are discovery-only pointers and can never back a
+  derived observation.
+- Source classes: company/fund/manager first-party and official registries
+  are allowed; search snippets, scraped directories, social posts and
+  bypass classes are forbidden.
+
+```bash
+nbb tools/financing_round_fixtures.cljs
+```
+
+What these are not:
+
+- Not a score or ranking. Not investment advice, ownership, endorsement or
+  suitability. No personal profiling or wealth inference.
+
+Exit codes for both fixture runners: `0` all fixtures ran clean · `1` a
+violation was found · `2` REFUSED (contract could not be read).
