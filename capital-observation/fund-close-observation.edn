@@ -9,13 +9,24 @@
 ;; derived observation below is an "observed claim" record that a reader
 ;; can trace back to a source receipt by hash.
 ;;
-;; Method version: v1 (2026-08-30). Any change to field semantics bumps
-;; :method/version and appends a :refresh/history entry; old observations
-;; are never silently reinterpreted.
+;; Method version: v2 (2026-09-01). v2 additions over v1:
+;;   * :provenance-chain is required on EVERY event, not only on derived
+;;     observations (a close with no traceable receipt chain is unmeasured).
+;;   * entity separation gains an identifier invariant: one :identifier-value
+;;     never denotes two different entity types, and one entity id never
+;;     carries two different identifier values.
+;;   * receipt disagreement (:receipt-disagreement) is RECORDED, never
+;;     resolved — two allow-listed receipts stating different facts yield a
+;;     flagged observation, not a merged "truth".
+;;   * new missingness flags: :fetch-status-non-ok, :identifier-unstated,
+;;     :provenance-chain-incomplete, :receipt-disagreement.
+;; Any further change to field semantics bumps :method/version and appends
+;; a :refresh/history entry; old observations are never silently
+;; reinterpreted. v1 history: v1 (2026-08-30) initial bounded contract.
 
 {:contract/id :fund-close-observation
- :contract/version "1.0.0"
- :method/version "fund-close-observation.v1"
+ :contract/version "2.0.0"
+ :method/version "fund-close-observation.v2"
  :actor :cloud-itonami/app-public-fund
  :proposes-to :network-awai/app-hyakka
 
@@ -47,7 +58,21 @@
   ;; discovery-only pointers; they can never back a derived observation.
   :source-class-discovery-only #{:news-report :licensed-commercial-aggregator}
   :fetch {:respect-robots? true :respect-auth-waf-captcha? true
-          :user-agent "app-public-fund-capital-observation/1.0"}}
+          :user-agent "app-public-fund-capital-observation/2.0"}}
+
+ ;; ── Receipt disagreement (v2) ──────────────────────────────────────
+ ;; Two allow-listed receipts may state different facts about the same
+ ;; event (e.g. different first-close figures). This contract NEVER
+ ;; arbitrates between them: the observation carries both receipts in its
+ ;; provenance chain and the :receipt-disagreement flag. A reader can
+ ;; audit the disagreement; the contract does not pick a winner.
+ :receipt-disagreement
+ {:rule :record-never-resolve
+  :applies-when [:two-or-more-allow-class-receipts :same-event-id
+                 :differing-value]
+  :result {:missingness-flag :receipt-disagreement
+           :provenance-chain :all-conflicting-receipt-ids
+           :value :unmeasured}}
 
  ;; ── Typed entity/event inputs ──────────────────────────────────────
  ;; Entity separation is a hard invariant: a venture firm, a fund vehicle
@@ -62,6 +87,12 @@
            :identifier-class :identifier-value :source-receipt-id
            :asserted-at :observed-at]
   :invariant :one-entity-type-per-entity-id
+  ;; v2 identifier invariants: an identifier value denotes exactly one
+  ;; entity across all types, and one entity id carries exactly one
+  ;; identifier value. A missing identifier is :identifier-unstated,
+  ;; never guessed from a brand string.
+  :identifier-invariant [:identifier-value-unique-across-entity-types
+                         :one-identifier-per-entity-id]
   :note "A brand string never auto-creates a legal entity."}
  :event-record
  {:schema [:event-id :event-type :entity-id :announced-at :asserted-at
@@ -69,16 +100,28 @@
                     :stated-final-close :disbursed-credits]
                     :currency :string
                     :as-stated-by-source? true}
-           :source-receipt-id]
+           :source-receipt-id
+           :provenance-chain]                 ; v2: receipt ids, verbatim order
   ;; announced-target-is-not-closed-fund-size;
   ;; announced-round-is-not-cash-received.
-  :invariant :amount-kind-is-carried-not-collapsed}
+  :invariants [:amount-kind-is-carried-not-collapsed
+               :provenance-chain-required-on-every-event]}
+
+ ;; v2: fetch-status must be surfaced, not swallowed. A receipt whose
+ ;; fetch did not fully succeed backs no derived observation and flags
+ ;; :fetch-status-non-ok.
+ :receipt-admission
+ {:rule :fetch-status-ok-required
+  :admit-when #{:ok}
+  :else {:missingness-flag :fetch-status-non-ok :backs-observation? false}}
 
  ;; ── Missingness / coverage flags ───────────────────────────────────
  :missingness
  {:flags #{:no-receipt :receipt-unparseable :amount-not-stated
            :close-kind-unstated :jurisdiction-unstated
-           :source-language-unmapped}
+           :source-language-unmapped
+           :fetch-status-non-ok :identifier-unstated
+           :provenance-chain-incomplete :receipt-disagreement}
   :rule :missing-is-unmeasured
   :coverage-unit [:jurisdiction :source :language :year :industry :stage
                   :identifier-class]
@@ -140,4 +183,3 @@
                     :missingness-flags]
   :status-values #{:ok :unmeasured :out-of-window}
   :rule :readback-must-carry-coverage-and-missingness}}
-

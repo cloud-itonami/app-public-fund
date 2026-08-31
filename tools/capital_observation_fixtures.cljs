@@ -7,6 +7,10 @@
 ;;   1  a fixture ran and found a violation
 ;;   2  REFUSED — a fixture could not run
 ;;
+;; v2: adds fixtures for event-level provenance chains, fetch-status
+;; admission, identifier-based entity separation, and record-never-resolve
+;; receipt disagreement handling.
+;;
 ;; Usage: nbb tools/capital_observation_fixtures.cljs [path/to/contract.edn]
 
 (ns capital-observation-fixtures
@@ -67,12 +71,14 @@
     :announced-at "2026-08-10" :asserted-at "2026-08-30"
     :amount {:kind :stated-first-close :currency "JPY"
              :value 5000000000 :as-stated-by-source? true}
-    :source-receipt-id "r-1"}
+    :source-receipt-id "r-1"
+    :provenance-chain ["r-1"]}
    {:event-id "ev-2" :event-type :fund-final-close :entity-id "e-1"
     :announced-at "2026-08-25" :asserted-at "2026-08-30"
     ;; amount-not-stated: the receipt says final close, no figure.
     :amount {:kind :stated-final-close :value nil :as-stated-by-source? true}
-    :source-receipt-id "r-2"}])
+    :source-receipt-id "r-2"
+    :provenance-chain ["r-2"]}])
 
 (def window {:from "2026-08-01" :until "2026-09-01"
              :declared-at "2026-08-30" :timezone "UTC"})
@@ -86,6 +92,38 @@
       (when-not (and r (re-find #"^[0-9a-f]{64}$" (:content-hash r)))
         (fail! f (str "event " (:event-id ev) " lacks a hash-backed receipt"))))))
 
+(defn fixture-event-provenance-chain [f]
+  ;; v2: :provenance-chain is required on EVERY event and every chain
+  ;; member must be a known receipt id.
+  (let [known (set (map :receipt-id receipts))]
+    (doseq [ev events]
+      (let [chain (:provenance-chain ev)]
+        (when (or (nil? chain) (empty? chain))
+          (fail! f (str "event " (:event-id ev) " has no provenance chain")))
+        (when (some #(not (contains? known %)) (or chain []))
+          (fail! f (str "event " (:event-id ev)
+                        " cites an unknown receipt in its chain"))))
+      ;; primary receipt must be in the chain
+      (when-not (some #(= % (:source-receipt-id ev)) (:provenance-chain ev))
+        (fail! f (str "event " (:event-id ev)
+                      " primary receipt missing from its chain"))))))
+
+(defn fixture-fetch-status-admission [f]
+  ;; v2: a receipt with non-:ok fetch status backs no observation and
+  ;; must flag :fetch-status-non-ok.
+  (let [admission (:receipt-admission contract)
+        bad (assoc (first receipts) :fetch-status :partial)]
+    (when-not (= #{:ok} (:admit-when admission))
+      (fail! f "receipt-admission admit-when must be exactly #{:ok}"))
+    (when-not (= :fetch-status-non-ok (:missingness-flag (:else admission)))
+      (fail! f "non-ok fetch must map to :fetch-status-non-ok"))
+    (when (:backs-observation? (:else admission))
+      (fail! f "non-ok receipt must not back an observation"))
+    (when-not (contains? (:flags (:missingness contract)) :fetch-status-non-ok)
+      (fail! f "missingness flags must declare :fetch-status-non-ok"))
+    (when (= :ok (:fetch-status bad))
+      (fail! f "sanity: partial receipt must not read as ok"))))
+
 (defn fixture-entity-separation [f]
   ;; Same brand name must not collapse into one entity id.
   (let [by-name (group-by :name entities)]
@@ -94,6 +132,49 @@
                  (not= (count (set (map :entity-id group)))
                        (count group)))
         (fail! f (str "brand " name " collapsed distinct entities"))))))
+
+(defn fixture-identifier-invariants [f]
+  ;; v2: one identifier value never denotes two entity types; one entity
+  ;; id never carries two identifier values.
+  (let [by-ident (group-by :identifier-value entities)]
+    (doseq [[ident group] by-ident]
+      (when (and (> (count group) 1)
+                 (not (apply distinct? (map :entity-type group))))
+        (fail! f (str "identifier " ident " denotes multiple entity types")))))
+  (let [by-id (group-by :entity-id entities)]
+    (doseq [[id group] by-id]
+      (when (> (count (set (map :identifier-value group))) 1)
+        (fail! f (str "entity " id " carries multiple identifier values")))))
+  (when-not (contains? (:flags (:missingness contract)) :identifier-unstated)
+    (fail! f "missingness flags must declare :identifier-unstated")))
+
+(defn fixture-receipt-disagreement [f]
+  ;; v2: two allow-class receipts stating different values for the same
+  ;; event must be RECORDED (flag + both receipts in chain, value
+  ;; unmeasured), never resolved to one winner.
+  (let [disagree (:receipt-disagreement contract)
+        conflicting-receipts
+        [(receipt "r-x" "https://a.test/1" :official-regulator "en" "first close 5B")
+         (receipt "r-y" "https://b.test/2" :fund-first-party "en" "first close 4B")]
+        event {:event-id "ev-d" :amount {:kind :stated-first-close
+                                         :value :conflicting}
+               :provenance-chain ["r-x" "r-y"]}]
+    (when-not (= :record-never-resolve (:rule disagree))
+      (fail! f "disagreement rule must be record-never-resolve"))
+    (when-not (contains? (:flags (:missingness contract)) :receipt-disagreement)
+      (fail! f "missingness flags must declare :receipt-disagreement"))
+    ;; fixture behaviour: with conflicting values, observation must carry
+    ;; the flag and ALL conflicting receipt ids, and value = unmeasured.
+    (let [flagged {:missingness-flags #{:receipt-disagreement}
+                   :provenance-chain (:provenance-chain event)
+                   :value :unmeasured}]
+      (when (not= (count (:provenance-chain flagged))
+                  (count conflicting-receipts))
+        (fail! f "disagreement must keep ALL conflicting receipts in chain"))
+      (when-not (contains? (:missingness-flags flagged) :receipt-disagreement)
+        (fail! f "disagreement must set :receipt-disagreement flag"))
+      (when-not (= :unmeasured (:value flagged))
+        (fail! f "disagreement must leave value unmeasured, not pick a winner")))))
 
 (defn fixture-amount-kinds [f]
   ;; announced target / first close / final close kinds must survive —
@@ -162,7 +243,11 @@
 
 (def fixtures
   {"provenance" fixture-provenance
+   "event-provenance-chain" fixture-event-provenance-chain
+   "fetch-status-admission" fixture-fetch-status-admission
    "entity-separation" fixture-entity-separation
+   "identifier-invariants" fixture-identifier-invariants
+   "receipt-disagreement" fixture-receipt-disagreement
    "amount-kinds" fixture-amount-kinds
    "window-bounds" fixture-window
    "derived-observation" fixture-derived-observation
