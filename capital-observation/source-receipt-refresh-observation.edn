@@ -1,0 +1,162 @@
+;; source-receipt-refresh-observation.edn — bounded actor contract for
+;; verifying SOURCE RECEIPTS and the append-only REFRESH HISTORY that
+;; back every capital observation, proposed to Hyakka
+;; (network-awai/app-hyakka) as auditable questions, not as a score.
+;;
+;; This contract is the integrity plane beneath the other capital
+;; observation contracts (fund-close / lp-commitment / financing-round /
+;; coverage-rollup): it observes the receipts and re-observation
+;; history themselves — byte identity, duplicate collapse across
+;; windows, provenance-chain integrity, discovery-only class escape,
+;; and history edit-detection. It does NOT observe markets, funds or
+;; companies; it observes the evidence records that other contracts
+;; cite, so that "we measured this" stays checkable.
+;;
+;; Scope guard: no ranking, scoring, centrality or suitability field
+;; exists in this shape by construction. A receipt that fails
+;; verification makes its dependent observations UNMEASURED, never
+;; silently re-based.
+;;
+;; Method version: v1 (2026-09-01). Any change to field semantics bumps
+;; :method/version and appends a :refresh/history entry; old audit
+;; records are never silently reinterpreted.
+
+{:contract/id :source-receipt-refresh-observation
+ :contract/version "1.0.0"
+ :method/version "source-receipt-refresh-observation.v1"
+ :actor :cloud-itonami/app-public-fund
+ :proposes-to :network-awai/app-hyakka
+
+ ;; ── Measurement window ─────────────────────────────────────────────
+ ;; Integrity audits are also time-bounded. A window is a half-open
+ ;; interval [from, until) in UTC. "missing" inside a window means
+ ;; "not audited in this window", never "no drift occurred".
+ :window
+ {:schema [:from :until :declared-at :timezone]
+  :format "YYYY-MM-DD"
+  :closed? false
+  :rule :audit-window-must-not-overlap-within-same-receipt-and-method}
+
+ ;; ── Source receipts (the observed object itself) ───────────────────
+ ;; A receipt record is the unit of observation. It is captured
+ ;; verbatim (bytes hash + fetch metadata) before any parsing, and is
+ ;; re-verified byte-for-byte at every audit pass.
+ :source-receipt
+ {:schema [:receipt-id :source-url :source-class :source-language
+           :captured-at :content-hash :fetch-status]
+  :content-hash {:algo "sha256" :of "response-body-bytes"}
+  :identity-rule :receipt-id-is-derived-from-content-hash-and-source-url
+  ;; same bytes from the same source captured again = the SAME receipt
+  ;; (deduplicated), never a second observation.
+  :dedup {:rule :same-content-hash-and-source-url-collapse-to-one-receipt
+          :first-capture-wins true}
+  :source-class-allow #{:official-regulator :official-stock-exchange-filing
+                        :official-company-registry :fund-first-party
+                        :manager-first-party :institutional-lp-first-party
+                        :official-board-record}
+  :source-class-forbid #{:search-snippet :generated-summary :scraped-directory
+                         :social-post :broker-list :paywall-bypass
+                         :captcha-bypass}
+  :source-class-discovery-only #{:news-report :licensed-commercial-aggregator}
+  :fetch {:respect-robots? true :respect-auth-waf-captcha? true
+          :user-agent "app-public-fund-capital-observation/1.0"}}
+
+ ;; ── Verification records ───────────────────────────────────────────
+ ;; One verification per receipt per audit pass. A verification that
+ ;; fails marks dependent observations :receipt-unverifiable for that
+ ;; window — it does not delete or rewrite them.
+ :verification-record
+ {:schema [:verification-id :receipt-id :window :verified-at
+           :method/version :byte-identity {:kind [:one-of :content-hash-match
+                                                  :content-hash-mismatch
+                                                  :source-unreachable
+                                                  :fetch-status-changed]}
+           :dependent-observation-count]
+  :invariant :failing-verification-marks-dependents-unmeasured
+  :rule :verification-is-not-a-claim-about-the-world
+        ; a mismatch says "bytes changed", never "the fact was wrong"
+  }
+
+ ;; ── Refresh history integrity ──────────────────────────────────────
+ ;; The refresh history is append-only. This contract audits that
+ ;; property directly: an edit to a prior history entry is itself an
+ ;; observed :history-edit event, carrying before/after hashes.
+ :refresh-history
+ {:schema [:history-id :observation-id :re-observed-at
+           :reason {:kind [:one-of :window-advanced :source-updated
+                     :method-version-bumped]}
+           :changed-fields :entry-hash]
+  :append-only? true
+  :entry-hash {:algo "sha256" :of "serialized-history-entry-bytes"}
+  :audit-event-types #{:history-edit :history-delete-attempt
+                       :entry-hash-mismatch}
+  :rule :append-only-violation-is-an-observation-not-a-repair}
+
+ ;; ── Missingness / coverage flags ───────────────────────────────────
+ :missingness
+ {:flags #{:no-receipt :receipt-unparseable :receipt-unverifiable
+           :source-unreachable :discovery-only-only
+           :source-language-unmapped}
+  :rule :missing-is-unmeasured
+  :coverage-unit [:receipt :source :source-class :language :window
+                  :method/version]
+  :coverage-record
+  {:schema [:coverage-unit :unit-key :observed-count :unmeasured-count
+            :window :method/version]}}
+
+ ;; ── Derived observation ────────────────────────────────────────────
+ ;; The only derived artifact is an integrity observation over receipts
+ ;; and history within a window. No rank/score/centrality field exists.
+ :derived-observation
+ {:schema [:observation-id :method/version :window
+           :observation-kind :receipt-id :history-id
+           :value {:kind [:one-of :receipt-verification-count
+                    :duplicate-collapse-count :unverifiable-count
+                    :append-only-violation-count :coverage-observation]
+                   :basis #{:receipt-only}}
+           :missingness-flags :provenance-chain
+           :asserted-at]
+  :observation-kinds #{:receipt-verified-in-window
+                       :receipt-duplicate-collapsed-in-window
+                       :receipt-unverifiable-in-window
+                       :history-append-only-violation-in-window}
+  :forbidden-fields #{:rank :score :centrality :nav :ownership-stake
+                      :suitability :recommendation :current-valuation}}
+
+ ;; ── Provenance chain ───────────────────────────────────────────────
+ ;; Every derived observation resolves to the receipt bytes it was
+ ;; computed from. A dependent observation whose receipt failed
+ ;; verification is flagged, not re-based.
+ :provenance-chain
+ {:schema [:observation-id :receipt-id :content-hash
+           :verification-id :captured-at]
+  :invariant :every-derived-observation-resolves-to-verified-receipt}
+
+ ;; ── Hyakka proposal ────────────────────────────────────────────────
+ ;; What is proposed to Hyakka is a set of auditable QUESTIONS over the
+ ;; integrity records, e.g. "how many receipts cited by fund-close
+ ;; observations failed byte verification in window W?" — each question
+ ;; carries its own coverage/missingness statement and no advice,
+ ;; ranking or suitability language is expressible in the shape.
+ :hyakka-proposal
+ {:proposal-kind :auditable-questions-only
+  :question-examples
+  ["How many receipts failed byte verification in window W?"
+   "How many duplicate captures collapsed to an existing receipt in window W?"
+   "Were any append-only refresh-history edits observed in window W?"
+   "What fraction of dependent observations became unmeasured in window W?"]
+  :never #{:investment-advice :ranking :centrality :ownership
+           :suitability :outreach :solicitation}}
+
+ ;; ── Query / readback ───────────────────────────────────────────────
+ ;; Readback is deterministic and always carries coverage + missingness.
+ ;; Paginated, stable order (by observation-id), no unbounded scans.
+ :query-readback
+ {:query-schema [:window :method/version
+                 :kind [:one-of :verification :duplicate :unverifiable
+                        :append-only-violation :coverage]
+                 :cursor]
+  :readback-schema [:observations :next-cursor :coverage :missingness-flags
+                    :method/version :window]
+  :paging {:stable-order-by :observation-id :page-size 100}
+  :invariant :readback-always-carries-coverage-and-missingness}}
