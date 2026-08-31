@@ -1,0 +1,108 @@
+;; observation-query-readback.edn — bounded readback/pagination contract for
+;; the app-public-fund capital-observation actor, proposed to Hyakka.
+;;
+;; This is a compositional improvement to the actor's existing contracts
+;; (fund-close-observation.v1 on main; lp-commitment / financing-round on
+;; open PRs). It does NOT redefine any observation semantics: it constrains
+;; HOW observation records are read back over the query plane so that any
+;; consumer (Hyakka question runner, audit replay) gets byte-stable,
+;; coverage-carrying, version-separated pages.
+;;
+;; Scope guard: readback is a transport shape only. It adds no derived
+;; fields, no aggregation beyond the per-kind counts already defined in the
+;; underlying contracts, and structurally forbids rank/score/centrality/
+;; ownership/suitability/valuation in responses, headers and cursors.
+;; Method version: observation-readback.v1 (2026-09-01).
+
+{:contract/id :observation-query-readback
+ :contract/version "1.0.0"
+ :method/version "observation-readback.v1"
+ :actor :cloud-itonami/app-public-fund
+ :proposes-to :network-awai/app-hyakka
+ :composes-with [:fund-close-observation]   ; any contract exposing :query-readback
+
+ ;; ── Page request ───────────────────────────────────────────────────
+ ;; A readback page request is a bounded slice of one observation kind in
+ ;; one window, under exactly one method/version. Unknown keys are
+ ;; rejected with :status :bad-request, never ignored.
+ :page-request
+ {:schema [:query-id :observation-kind :method/version :window
+           :page {:schema [:cursor :page-size]
+                  :page-size {:min 1 :max 200 :default 50}}
+           :filter {:keys #{:jurisdiction :entity-type :amount-kind}}]
+  :rule :unknown-keys-rejected-not-ignored
+  ;; Cursor is opaque to consumers and derived deterministically from the
+  ;; server-side ordering — a consumer cannot construct or decode it.
+  :cursor {:opaque? true :consumer-constructible? false}}
+
+ ;; ── Deterministic ordering ─────────────────────────────────────────
+ ;; Pages are stable across identical requests within the same window +
+ ;; method/version, so an auditor re-running the same query gets the same
+ ;; bytes. Ordering is (observation-id asc); observation-id is assigned
+ ;; at observation time and never reused.
+ :ordering
+ {:key :observation-id :direction :asc
+  :rule :same-request-same-window-same-version-same-pages
+  ;; A re-observation (refresh-history entry) does NOT reorder or remove
+  ;; earlier pages: the older observation row remains in its original
+  ;; position; the newer one appears as an additional row.
+  :refresh-effect :append-only-rows}
+
+ ;; ── Version separation ─────────────────────────────────────────────
+ ;; Rows from different :method/version values are never mixed in one
+ ;; page. A readback request pins one version; a consumer that wants to
+ ;; compare versions issues one request per version and reconciles via
+ ;; entity/event ids, not by inference inside a page.
+ :version-separation
+ {:rule :one-method-version-per-page
+  :cross-version-comparison {:allowed-via #{:entity-id :event-id :window}
+                             :not-by :implicit-merge}}
+
+ ;; ── Page response ──────────────────────────────────────────────────
+ ;; Every response — including empty pages and :unmeasured — carries the
+ ;; coverage record reference and missingness flags of the window it
+ ;; covers. An empty page is never silently presented as "no events
+ ;; happened"; its status says :unmeasured with the reason.
+ :page-response
+ {:schema [:query-id :status
+           :page {:cursor-next [:one-of :cursor-string :nil]
+                  :page-size :returned-count
+                  :has-more :bool}
+           :observations [:observation-id]
+           :coverage-record-ref :missingness-flags
+           :empty-reason [:one-of :nil :no-receipts-in-window
+                          :kind-not-observed :window-out-of-coverage]]
+  :status-values #{:ok :unmeasured :out-of-window :bad-request}
+  :rule :every-response-carries-coverage-and-missingness
+  ;; Identifiers returned are opaque observation/entity ids only. Legal
+  ;; names, registry identifiers, amounts and receipt URLs are resolved
+  ;; through the underlying contract's own readback, never denormalized
+  ;; into pages.
+  :fields-in-page #{:observation-id}
+  :forbidden-fields #{:rank :score :centrality :nav :ownership-stake
+                      :suitability :recommendation :current-valuation
+                      :legal-name :identifier-value :amount
+                      :source-url :content-hash}}
+
+ ;; ── Retention / redaction ──────────────────────────────────────────
+ ;; Readback is a serving projection. If a page source is unavailable,
+ ;; the response is :unmeasured — it never falls back to reconstructing
+ ;; observations from cached or derived data.
+ :retention
+ {:rule :serving-projection-only
+  :unavailable-source-response :unmeasured
+  :rebuild-from-cache? false}
+
+ ;; ── Hyakka proposal (questions only) ───────────────────────────────
+ ;; Example auditable question enabled by this shape: "Given window W and
+ ;; method version V, are the fund-first-close observation pages stable
+ ;; and coverage-carrying across two identical readbacks?" — pagination
+ ;; stability is itself an auditable property, not a score.
+ :hyakka-proposal
+ {:schema [:proposal-id :question-text :over-page-request
+           :stability-check {:kind :identical-request-twice
+                             :assert :same-observations-same-order}
+           :disclaimer]
+  :disclaimer
+  "Readback shape only. Not performance, ownership, endorsement or
+   investment suitability. No investment advice."}}

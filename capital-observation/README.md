@@ -31,3 +31,19 @@ nbb tools/capital_observation_fixtures.cljs
 
 Exit codes: `0` all fixtures ran clean · `1` a violation was found ·
 `2` REFUSED (contract could not be read).
+
+## Readback pagination (`observation-query-readback.edn`)
+
+A compositional contract constraining HOW observation records are served
+back over the query plane: deterministic `(observation-id asc)` ordering
+with opaque cursors, one method/version per page (no implicit version
+mixing), every response — including empty pages — carrying its coverage
+record and missingness flags, unknown request keys rejected, and
+unavailable sources answered `:unmeasured` instead of a cache rebuild.
+No new derived fields are introduced; page bodies carry observation ids
+only (legal names, identifiers, amounts, receipt URLs resolve through
+the underlying contract's own readback).
+
+```bash
+nbb tools/observation_readback_fixtures.cljs
+```
