@@ -128,6 +128,14 @@ proposed to Hyakka as auditable questions.
   history, no rank/score/returns/ownership/suitability fields,
   questions-only Hyakka proposal, and a deterministic readback that
   always carries coverage + missingness.
+- **v1.1 — cross-source conflict**: when two allowed first-party sources
+  disagree about the same (fund-vehicle, portfolio-company) listing in
+  the same window, the disagreement itself is carried as a
+  `:conflict-observation` with both receipts
+  (`:competing-source-receipt-ids`). The resolution is always
+  `:carry-both-never-resolve` — no winner is picked, the pair is flagged
+  `:first-party-source-conflict` wherever it appears downstream, and a
+  conflict never resolves into an ownership or current-holding claim.
 
 Verify deterministically (offline, no network):
 

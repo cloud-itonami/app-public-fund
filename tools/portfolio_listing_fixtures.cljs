@@ -52,7 +52,12 @@
    (receipt "r-2" "https://example-manager.test/portfolio" :manager-first-party "en"
             "Our portfolio: BETA Inc.") ; ALPHA removed in a later capture
    (receipt "r-3" "https://news.example.test/article" :news-report "en"
-            "Rumor: ALPHA joined a fund portfolio")])
+            "Rumor: ALPHA joined a fund portfolio")
+   ;; v1.1 cross-source conflict: the official registry record for the
+   ;; same jurisdiction does NOT show ALPHA as listed — a first-party
+   ;; disagreement with r-1 about the same pair.
+   (receipt "r-4" "https://registry.example.test/REG-F" :official-company-registry "ja"
+            "REG-F: no portfolio-company listings recorded")])
 
 (def entities
   [{:entity-id "e-1" :entity-type :management-company :name "EXAMPLE MANAGER"
@@ -94,6 +99,16 @@
 
 (def window {:from "2026-08-01" :until "2026-09-01"
              :declared-at "2026-09-01" :timezone "UTC"})
+
+;; v1.1: two first-party sources disagree about the same
+;; (fund-vehicle, portfolio-company) pair in the same window. Both
+;; receipts are carried; the conflict is never adjudicated.
+(def conflict
+  {:conflict-id "cf-1" :window window
+   :fund-vehicle-entity-id "e-3" :portfolio-company-entity-id "e-2"
+   :competing-source-receipt-ids ["r-1" "r-4"]
+   :conflict-kind :listed-vs-absent :observed-at "2026-09-01"
+   :resolution :carry-both-never-resolve})
 
 ;; ── Fixtures ────────────────────────────────────────────────────────
 
@@ -206,7 +221,51 @@
       (fail! f "coverage must report unmeasured alongside observed")))
   (when-not (contains? (set (:flags (:missingness contract)))
                        :listing-kind-unstated)
-    (fail! f "unstated listing kind must flag :listing-kind-unstated, not vanish")))
+    (fail! f "unstated listing kind must flag :listing-kind-unstated, not vanish"))
+  ;; v1.1: a cross-source first-party conflict must flag, not silently
+  ;; pick a side.
+  (when-not (contains? (set (:flags (:missingness contract)))
+                       :first-party-source-conflict)
+    (fail! f "cross-source conflict must flag :first-party-source-conflict")))
+
+(defn fixture-conflict-carried [f]
+  ;; v1.1: every competing side backs to its own receipt by id, both
+  ;; sides come from allowed first-party classes, and the declared
+  ;; resolution is carry-both-never-resolve.
+  (let [{:keys [schema conflict-kinds resolution]} (:conflict-observation contract)
+        allowed (set (:source-class-allow (:source-receipt contract)))
+        by-id (into {} (map (juxt :receipt-id identity) receipts))
+        schema-keys (set schema)]
+    (when-not (contains? schema-keys :competing-source-receipt-ids)
+      (fail! f "conflict schema must carry competing-source-receipt-ids"))
+    (when-not (contains? conflict-kinds (:conflict-kind conflict))
+      (fail! f "conflict kind not in declared set"))
+    (when-not (= resolution (:resolution conflict))
+      (fail! f "conflict must carry-both-never-resolve"))
+    (when-not (>= (count (:competing-source-receipt-ids conflict)) 2)
+      (fail! f "a conflict needs at least two competing receipts"))
+    (doseq [rid (:competing-source-receipt-ids conflict)]
+      (let [r (get by-id rid)]
+        (when-not r (fail! f (str "conflict receipt missing: " rid)))
+        (when (and r (not (contains? allowed (:source-class r))))
+          (fail! f (str "conflict receipt not from an allowed first-party class: " rid)))))))
+
+(defn fixture-conflict-not-adjudicated [f]
+  ;; The conflict record carries no winner/adjudication field, and the
+  ;; contract's invariants state the conflict never resolves into an
+  ;; ownership or current-holding claim.
+  (let [co (:conflict-observation contract)]
+    (when-not (= :carry-both-never-resolve (:resolution co))
+      (fail! f "resolution must be :carry-both-never-resolve"))
+    (when-not (contains? (set (:invariants co))
+                         :conflict-is-observation-not-adjudication)
+      (fail! f "missing invariant: conflict-is-observation-not-adjudication"))
+    (when-not (contains? (set (:invariants co))
+                         :conflict-never-resolves-into-ownership-or-current-holding)
+      (fail! f "missing invariant: conflict-never-resolves-into-ownership-or-current-holding"))
+    (doseq [banned [:winner :adjudicated :resolved-claim :verified-ownership]]
+      (when (some #(= (keyword (name %)) banned) (:schema co))
+        (fail! f (str "conflict schema carries an adjudication field: " banned))))))
 
 (def fixtures
   {"provenance" fixture-provenance
@@ -218,7 +277,9 @@
    "derived-observation" fixture-derived-observation
    "refresh-history" fixture-refresh-history
    "readback" fixture-readback
-   "coverage-missingness" fixture-coverage-missingness})
+   "coverage-missingness" fixture-coverage-missingness
+   "conflict-carried" fixture-conflict-carried
+   "conflict-not-adjudicated" fixture-conflict-not-adjudicated})
 
 ;; ── Run ─────────────────────────────────────────────────────────────
 (defn run-all []

@@ -16,13 +16,18 @@
 ;; investment advice. Every derived observation traces back to a source
 ;; receipt by hash.
 ;;
-;; Method version: v1 (2026-09-01). Any change to field semantics bumps
+;; Method version: v1.1 (2026-09-01). Any change to field semantics bumps
 ;; :method/version and appends a :refresh/history entry; old
 ;; observations are never silently reinterpreted.
+;;
+;; v1.1: adds :conflict-observation — when two allowed first-party
+;; sources disagree about the same (fund-vehicle, portfolio-company)
+;; listing in the same window, the disagreement itself is carried as an
+;; observation with both receipts, and no winner is picked.
 
 {:contract/id :portfolio-listing-observation
- :contract/version "1.0.0"
- :method/version "portfolio-listing-observation.v1"
+ :contract/version "1.1.0"
+ :method/version "portfolio-listing-observation.v1.1"
  :actor :cloud-itonami/app-public-fund
  :proposes-to :network-awai/app-hyakka
 
@@ -84,13 +89,36 @@
  :missingness
  {:flags #{:no-receipt :receipt-unparseable :listing-kind-unstated
            :fund-vehicle-unstated :jurisdiction-unstated
-           :identifier-unstated :source-language-unmapped}
+           :identifier-unstated :source-language-unmapped
+           :first-party-source-conflict}
   :rule :missing-is-unmeasured
   :coverage-unit [:jurisdiction :source :language :year :industry :stage
                   :identifier-class]
   :coverage-record
   {:schema [:coverage-unit :unit-key :observed-count :unmeasured-count
             :window :method/version]}}
+
+ ;; ── Cross-source conflict ──────────────────────────────────────────
+ ;; Two allowed first-party sources may disagree about the same
+ ;; (fund-vehicle, portfolio-company) listing in the same window — e.g.
+ ;; the manager's page lists a company while the official registry
+ ;; record does not, or two first-party pages disagree on listing kind
+ ;; or on which fund vehicle did the listing. The conflict itself is an
+ ;; observation, never an adjudication: each side backs to its own
+ ;; receipt, both are carried, no winner is picked, and the
+ ;; disagreement is flagged wherever the pair appears downstream
+ ;; (missingness flag :first-party-source-conflict). A conflict never
+ ;; resolves into an ownership claim or a current-holding claim.
+ :conflict-observation
+ {:schema [:conflict-id :window :fund-vehicle-entity-id
+           :portfolio-company-entity-id :competing-source-receipt-ids
+           :conflict-kind :observed-at :resolution]
+  :conflict-kinds #{:listed-vs-absent :listing-kind-disagreement
+                    :fund-vehicle-disagreement}
+  :resolution :carry-both-never-resolve
+  :invariants #{:conflict-is-observation-not-adjudication
+                :each-side-backs-to-its-own-receipt
+                :conflict-never-resolves-into-ownership-or-current-holding}}
 
  ;; ── Derived observation ────────────────────────────────────────────
  ;; The only derived artifact is an observation of portfolio-page
