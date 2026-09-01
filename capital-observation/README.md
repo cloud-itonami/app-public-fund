@@ -280,6 +280,16 @@ as auditable questions.
   — no winner is picked, and a conflict never resolves into an
   ownership or endorsement claim.
 
+v2 additions (2026-09-02):
+
+- **Fetch-status admission**: a receipt whose fetch was not fully `:ok`
+  backs no entity, event or derived observation and flags
+  `:fetch-status-non-ok`. A non-ok receipt is recorded, never silently
+  dropped.
+- **Event-level provenance**: `:provenance-chain` is required on every
+  event, not only on derived observations. An event with no traceable
+  receipt chain is unmeasured (`:provenance-chain-incomplete`).
+
 Verify deterministically (offline, no network):
 
 ```bash
