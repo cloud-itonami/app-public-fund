@@ -1,0 +1,167 @@
+;; financing-round-observation.edn — bounded actor contract for observing
+;; PUBLIC startup financing-round announcements (seed / series / growth
+;; stages), proposed to Hyakka (network-awai/app-hyakka) as auditable
+;; questions, not as a score.
+;;
+;; Scope guard: this contract observes *announced* rounds only. An
+;; announcement is a claim made by a source — it is never evidence that
+;; cash was received, that a valuation was verified, or that a lead
+;; investor acquired board control (announced-round-is-not-cash-received;
+;; lead-investor-is-not-board-control; estimated-valuation-is-not-verified-
+;; valuation). It does NOT rank companies, investors or LPs, does not
+;; infer ownership or personal wealth, and produces no investment advice.
+;; Every derived observation traces back to one source receipt by hash.
+;;
+;; Method version: v1 (2026-09-01). Any change to field semantics bumps
+;; :method/version and appends a :refresh/history entry; prior observations
+;; are never silently reinterpreted.
+
+{:contract/id :financing-round-observation
+ :contract/version "1.0.0"
+ :method/version "financing-round-observation.v1"
+ :actor :cloud-itonami/app-public-fund
+ :proposes-to :network-awai/app-hyakka
+
+ ;; ── Measurement window ─────────────────────────────────────────────
+ ;; Half-open [from, until) UTC ISO-8601 date interval. "missing" inside
+ ;; a window means "not measured in this window", never "nothing happened".
+ :window
+ {:schema [:from :until :declared-at :timezone]
+  :format "YYYY-MM-DD"
+  :closed? false                        ; [from, until)
+  :rule :window-must-not-overlap-within-same-source-and-method}
+
+ ;; ── Source receipts ────────────────────────────────────────────────
+ ;; One receipt per observation. Captured verbatim (bytes hash + fetch
+ ;; metadata) before any parsing. External content is untrusted.
+ :source-receipt
+ {:schema [:receipt-id :source-url :source-class :source-language
+           :observed-at :content-hash :fetch-status]
+  :content-hash {:algo "sha256" :of "response-body-bytes"}
+  ;; A round announcement may legitimately come from the company itself,
+  ;; the investor's own first-party page, or an official filing. News
+  ;; reports are discovery-only pointers and can never back a derived
+  ;; observation (news-report-is-not-an-issuer-or-regulator-filing).
+  :source-class-allow #{:company-first-party :manager-first-party
+                        :fund-first-party :official-company-registry
+                        :official-regulator :official-stock-exchange-filing}
+  :source-class-forbid #{:search-snippet :generated-summary
+                         :scraped-directory :social-post :broker-list
+                         :paywall-bypass :captcha-bypass}
+  :source-class-discovery-only #{:news-report :licensed-commercial-aggregator}
+  :fetch {:respect-robots? true :respect-auth-waf-captcha? true
+          :user-agent "app-public-fund-capital-observation/1.0"}}
+
+ ;; ── Typed entity/event inputs ──────────────────────────────────────
+ ;; Entity separation is a hard invariant: the company (brand or legal
+ ;; entity), the venture firm, the fund vehicle and the general partner
+ ;; are distinct entities even when they share a brand name
+ ;; (brand-is-not-legal-entity; venture-firm-is-not-fund-vehicle).
+ :entity-types #{:company :legal-entity :brand :venture-firm
+                 :fund-vehicle :general-partner :jurisdiction}
+ :event-types #{:round-announced :round-confirmed-by-registry-filing
+                :round-correction}
+ :entity-record
+ {:schema [:entity-id :entity-type :name :legal-name :jurisdiction
+           :identifier-class :identifier-value :source-receipt-id
+           :asserted-at :observed-at]
+  :invariant :one-entity-type-per-entity-id
+  :note "A brand string never auto-creates a legal entity."}
+
+ ;; A round announcement event carries the amount exactly as stated, with
+ ;; its kind carried — never collapsed. An "estimated valuation" string
+ ;; from a press page is a stated-claim, not a verified valuation.
+ ;; Participant roles are carried as observed claims; a stated lead role
+ ;; is not board control.
+ :event-record
+ {:schema [:event-id :event-type :company-entity-id
+           :announced-at :asserted-at
+           :amount {:kind [:one-of :stated-round-size :stated-raise
+                           :stated-post-money-valuation-claim]
+                    :currency :string
+                    :as-stated-by-source? true
+                    :missing-flag [:one-of nil :amount-not-stated]}
+           :stage {:kind [:one-of :pre-seed :seed :series-a :series-b
+                    :series-c :series-d-plus :growth :unknown]}
+           :participants [:participant-claim]
+           :source-receipt-id]
+  :participant-claim
+  {:schema [:participant-entity-id :stated-role
+            {:kind [:one-of :lead :co-investor :existing-investor]}]
+   ;; portfolio-page-is-an-observed-claim-not-a-current-holding: a
+   ;; participant listed on a portfolio page is an observed claim bound
+   ;; to the page's receipt and observed-at, not a current holding.
+   :invariant :stated-role-is-an-observed-claim}
+  ;; announced-round-is-not-cash-received.
+  :invariant :amount-kind-is-carried-not-collapsed}
+
+ ;; ── Missingness / coverage flags ───────────────────────────────────
+ :missingness
+ {:flags #{:no-receipt :receipt-unparseable :amount-not-stated
+           :stage-unstated :company-jurisdiction-unstated
+           :participant-role-unstated :source-language-unmapped
+           :amount-kind-unmappable}
+  :rule :missing-is-unmeasured
+  :coverage-unit [:jurisdiction :source :language :year :industry :stage
+                  :identifier-class]
+  :coverage-record
+  {:schema [:coverage-unit :unit-key :observed-count :unmeasured-count
+            :window :method/version]}}
+
+ ;; ── Derived observation ────────────────────────────────────────────
+ ;; The only derived artifact is an observation of announced rounds
+ ;; within a window. No ranking, scoring, centrality, ownership or
+ ;; suitability field exists in this shape by construction.
+ :derived-observation
+ {:schema [:observation-id :method/version :window
+           :observation-kind :company-entity-id :event-id
+           :value {:kind [:one-of :round-announcement-count
+                    :stated-amount-observation :stage-count]
+                   :basis #{:receipt-only}}
+           :missingness-flags :provenance-chain
+           :asserted-at]
+  :observation-kinds #{:round-announced-in-window
+                       :round-confirmed-by-registry-filing-in-window
+                       :stated-amount-in-window :stage-count-in-window}
+  :forbidden-fields #{:rank :score :centrality :nav :ownership-stake
+                      :suitability :recommendation :current-valuation
+                      :verified-valuation :cash-received}}
+
+ ;; ── Refresh history ────────────────────────────────────────────────
+ ;; Append-only. Corrections (:round-correction events) append; prior
+ ;; entries are never edited.
+ :refresh-history
+ {:schema [:history-id :observation-id :re-observed-at
+           :reason {:kind [:one-of :window-advanced :source-updated
+                     :round-corrected-by-source :method-version-bumped]}
+           :changed-fields]
+  :append-only? true}
+
+ ;; ── Hyakka proposal ────────────────────────────────────────────────
+ ;; Auditable QUESTIONS over the records, e.g. "how many seed-stage
+ ;; round announcements with receipts were observed in jurisdiction J
+ ;; within window W?" — each question carries its own coverage and
+ ;; missingness statement.
+ :hyakka-proposal
+ {:schema [:proposal-id :question-text :over-observation-kind
+           :window :coverage-record-ref :missingness-flags
+           :disclaimer]
+  :disclaimer
+  "Observations only. Announcements are not cash received; estimated
+   valuations are not verified valuations. Not performance, ownership,
+   endorsement or investment suitability. No investment advice."}
+
+ ;; ── Query / readback shape ─────────────────────────────────────────
+ ;; Deterministic readback: a question id + window returns observations
+ ;; plus the exact coverage statement that bounds them, or an explicit
+ ;; :unmeasured response. Unknown keys are rejected, not ignored.
+ :query-readback
+ {:request-schema [:query-id :observation-kind :window
+                   :filter {:keys #{:jurisdiction :stage :amount-kind
+                                    :participant-stated-role}}]
+  :response-schema [:query-id :status
+                    :observations [:observation-id]
+                    :coverage-record-ref
+                    :missingness-flags]
+  :status-values #{:ok :unmeasured :out-of-window}
+  :rule :readback-must-carry-coverage-and-missingness}}
