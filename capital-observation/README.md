@@ -91,4 +91,24 @@ the underlying contract's own readback).
 
 ```bash
 nbb tools/observation_readback_fixtures.cljs
+## Exit observation contract (`exit-observation.edn`)
+
+`exit-observation.edn` is a bounded actor contract for observing **exit
+events** (acquisition, IPO listing, liquidation) around fund and portfolio
+entities with provenance, proposed to Hyakka as auditable questions.
+
+- Announced exits and completed exits are carried as distinct event kinds
+  and are never collapsed. An estimated valuation is carried with kind
+  `:estimated-valuation` only — a verified/current valuation field cannot
+  exist in the derived-observation shape by construction.
+- Same guarantees as above: hash-backed receipts, entity separation,
+  time-bounded windows, missingness flags, append-only refresh history
+  (reclassification appends, never overwrites), no rank/score/returns/
+  ownership/suitability fields, questions-only Hyakka proposal, and a
+  deterministic readback that always carries coverage + missingness.
+
+Verify deterministically (offline, no network):
+
+```bash
+nbb tools/exit_observation_fixtures.cljs
 ```
