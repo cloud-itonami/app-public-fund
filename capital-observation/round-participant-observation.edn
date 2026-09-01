@@ -1,0 +1,182 @@
+;; round-participant-observation.edn — bounded actor contract for
+;; observing PUBLIC first-party/registry statements of which investors
+;; (and, as separately stated, which participant roles) were NAMED as
+;; participants in a financing round, proposed to Hyakka
+;; (network-awai/app-hyakka) as auditable questions, not as a score.
+;;
+;; Scope guard: this contract observes PARTICIPANT-NAMING EVENTS —
+;; "source S named entity P as a participant in financing round R at
+;; time T" — as source-backed claims only. A participant naming is a
+;; source's own statement; it is NOT verified ownership, NOT a share
+;; percentage, NOT a co-investment network edge with weight, NOT an
+;; endorsement of any participant, and NOT an investment-suitability
+;; signal (participant-naming-is-not-ownership-or-endorsement). The
+;; contract does not rank rounds, investors or companies, does not
+;; build centrality or co-investment graphs, does not infer returns,
+;; control or personal wealth, and produces no investment advice.
+;; Every derived observation traces back to a source receipt by hash.
+;;
+;; Method version: v1 (2026-09-01). Any change to field semantics bumps
+;; :method/version and appends a :refresh/history entry; old
+;; observations are never silently reinterpreted.
+
+{:contract/id :round-participant-observation
+ :contract/version "1.0.0"
+ :method/version "round-participant-observation.v1"
+ :actor :cloud-itonami/app-public-fund
+ :proposes-to :network-awai/app-hyakka
+
+ ;; ── Measurement window ─────────────────────────────────────────────
+ ;; Half-open [from, until) in UTC ISO-8601 dates. "missing" inside a
+ ;; window means "not measured in this window", never "nothing changed".
+ :window
+ {:schema [:from :until :declared-at :timezone]
+  :format "YYYY-MM-DD"
+  :closed? false                       ; [from, until)
+  :rule :window-must-not-overlap-within-same-source-and-method}
+
+ ;; ── Source receipts ────────────────────────────────────────────────
+ ;; Every observation cites exactly one receipt, captured verbatim
+ ;; (bytes hash + fetch metadata) before any parsing. Participant
+ ;; naming is first-party (a round participant's or the company's own
+ ;; materials) or official registry records; third-party reproductions
+ ;; may only DISCOVER, never back. Fundraising ANNOUNCEMENTS are
+ ;; observed as naming events only — never as performance or momentum.
+ :source-receipt
+ {:schema [:receipt-id :source-url :source-class :source-language
+           :observed-at :content-hash :fetch-status]
+  :content-hash {:algo "sha256" :of "response-body-bytes"}
+  :source-class-allow #{:company-first-party :participant-first-party
+                        :official-company-registry}
+  :source-class-forbid #{:search-snippet :generated-summary :scraped-directory
+                         :social-post :broker-list :paywall-bypass
+                         :captcha-bypass :generated-participant-list}
+  :source-class-discovery-only #{:news-report :licensed-commercial-aggregator}
+  :fetch {:respect-robots? true :respect-auth-waf-captcha? true
+          :user-agent "app-public-fund-round-participant-observation/1.0"}}
+
+ ;; ── Typed entity/event inputs ──────────────────────────────────────
+ ;; Entity separation is a hard invariant: financing round, company,
+ ;; investor entity and general-partner-of-investor are distinct
+ ;; entities even when they share a brand name (brand-is-not-legal-entity).
+ :entity-types #{:financing-round :company :investor-entity
+                 :general-partner :jurisdiction}
+ :event-types #{:participant-named :participant-role-stated
+                :participant-naming-withdrawn :registry-recorded}
+ :entity-record
+ {:schema [:entity-id :entity-type :name :legal-name :jurisdiction
+           :identifier-class :identifier-value :source-receipt-id
+           :asserted-at :observed-at]
+  :invariant :one-entity-type-per-entity-id
+  :note "A brand string never auto-creates a legal entity."}
+ :event-record
+ {:schema [:event-id :event-type :financing-round-entity-id
+           :participant-entity-id
+           :role {:kind [:one-of :lead-participant :participant
+                         :co-investor :unstated]
+                  :as-stated-by-source? true}
+           :observed-at :asserted-at :source-receipt-id]
+  :invariants #{:participant-naming-is-not-ownership-or-endorsement
+                :roles-carried-not-collapsed
+                :round-and-participant-are-distinct-entities}}
+
+ ;; ── Missingness / coverage flags ───────────────────────────────────
+ :missingness
+ {:flags #{:no-receipt :receipt-unparseable :role-unstated
+           :financing-round-unstated :participant-entity-unstated
+           :jurisdiction-unstated :identifier-unstated
+           :source-language-unmapped :first-party-source-conflict}
+  :rule :missing-is-unmeasured
+  :coverage-unit [:jurisdiction :source :language :year
+                  :identifier-class]
+  :coverage-record
+  {:schema [:coverage-unit :unit-key :observed-count :unmeasured-count
+            :window :method/version]}}
+
+ ;; ── Cross-source conflict ──────────────────────────────────────────
+ ;; Two allowed first-party sources may disagree about the same
+ ;; (financing-round, participant) naming in the same window — e.g. the
+ ;; company's own release names an investor while the investor's own
+ ;; page does not, or the two disagree on the stated role. The conflict
+ ;; itself is an observation, never an adjudication: each side backs to
+ ;; its own receipt, both are carried, no winner is picked, and the
+ ;; disagreement is flagged wherever the pair appears downstream
+ ;; (missingness flag :first-party-source-conflict). A conflict never
+ ;; resolves into an ownership or endorsement claim.
+ :conflict-observation
+ {:schema [:conflict-id :window :financing-round-entity-id
+           :participant-entity-id :competing-source-receipt-ids
+           :conflict-kind :observed-at :resolution]
+  :conflict-kinds #{:named-vs-absent :participant-disagreement
+                    :role-disagreement}
+  :resolution :carry-both-never-resolve
+  :invariants #{:conflict-is-observation-not-adjudication
+                :each-side-backs-to-its-own-receipt
+                :conflict-never-resolves-into-ownership-or-endorsement}}
+
+ ;; ── Derived observation ────────────────────────────────────────────
+ ;; The only derived artifact is an observation of participant-naming
+ ;; states within a window. No ranking, scoring, centrality, co-
+ ;; investment graph, returns, ownership or suitability field exists in
+ ;; this shape by construction.
+ :derived-observation
+ {:schema [:observation-id :method/version :window
+           :observation-kind :financing-round-entity-id
+           :participant-entity-id :event-id
+           :value {:kind [:one-of :participant-naming-observation
+                    :participant-naming-change-observation
+                    :participant-naming-state-count]
+                   :basis #{:receipt-only}}
+           :missingness-flags :provenance-chain
+           :asserted-at]
+  :observation-kinds #{:participant-named-in-window
+                       :participant-naming-withdrawn-in-window
+                       :participant-role-stated-in-window
+                       :participant-naming-state-in-window}
+  :forbidden-fields #{:rank :score :centrality :betweenness :degree
+                      :returns :irr :moic :ownership-stake
+                      :control-percentage :suitability :recommendation
+                      :current-valuation :network-edge-weight}}
+
+ ;; ── Refresh history ────────────────────────────────────────────────
+ ;; Append-only. A re-observation of the same entity/window with a
+ ;; newer method version appends; it never edits prior entries. A
+ ;; naming withdrawal is a NEW :participant-naming-withdrawn
+ ;; observation plus a history entry — the earlier naming observation
+ ;; is never overwritten or deleted.
+ :refresh-history
+ {:schema [:history-id :observation-id :re-observed-at
+           :reason {:kind [:one-of :window-advanced :source-updated
+                     :event-reclassified :method-version-bumped]}
+           :changed-fields]
+  :append-only? true
+  :rule :reclassification-appends-does-not-overwrite}
+
+ ;; ── Hyakka proposal ────────────────────────────────────────────────
+ ;; Auditable QUESTIONS over the observation records, e.g. "which
+ ;; entities were named as participants in financing round R by
+ ;; first-party sources in window W, with receipts?" — each question
+ ;; carries its own coverage and missingness statement.
+ :hyakka-proposal
+ {:schema [:proposal-id :question-text :over-observation-kind
+           :window :coverage-record-ref :missingness-flags
+           :disclaimer]
+  :disclaimer
+  "Observations only. A participant naming is a source's own
+   statement, not verified ownership, endorsement, performance,
+   network strength or investment suitability. No investment advice."}
+
+ ;; ── Query / readback shape ─────────────────────────────────────────
+ ;; Deterministic readback: a question id + window returns observations
+ ;; plus the exact coverage statement that bounds them, or an explicit
+ ;; :unmeasured response. Unknown keys are rejected, not ignored.
+ :query-readback
+ {:request-schema [:query-id :observation-kind :window
+                   :filter {:keys #{:jurisdiction :financing-round-entity-id
+                                    :participant-entity-id :role-kind}}]
+  :response-schema [:query-id :status
+                    :observations [:observation-id]
+                    :coverage-record-ref
+                    :missingness-flags]
+  :status-values #{:ok :unmeasured :out-of-window}
+  :rule :readback-must-carry-coverage-and-missingness}}
