@@ -1,33 +1,29 @@
-;; portfolio-listing-observation.edn — bounded actor contract for
-;; observing PUBLIC first-party "portfolio" page listings by fund
-;; managers, proposed to Hyakka (network-awai/app-hyakka) as auditable
-;; questions, not as a score.
+;; fund-manager-affiliation-observation.edn — bounded actor contract for
+;; observing PUBLIC first-party/registry statements of which management
+;; company (and, as separately stated, which general partner) is named
+;; for a fund vehicle, proposed to Hyakka (network-awai/app-hyakka) as
+;; auditable questions, not as a score.
 ;;
-;; Scope guard: this contract observes LISTING EVENTS — "source S listed
-;; company C on fund F's portfolio page at time T" — as source-backed
-;; claims only. A portfolio page listing is a manager's OWN statement
-;; about its own page; it is NOT verified ownership, NOT a current
-;; holding, NOT an endorsement, and NOT a performance claim
-;; (portfolio-listing-is-not-ownership-verification,
-;;  past-listing-is-not-current-holding). Removed names are carried as
-;; :removed-from-page observations, never deleted from history. The
-;; contract does not rank companies, funds, GPs or LPs, does not infer
-;; ownership stakes, personal wealth or returns, and produces no
-;; investment advice. Every derived observation traces back to a source
-;; receipt by hash.
+;; Scope guard: this contract observes NAMING EVENTS — "source S named
+;; management company M as the manager of fund vehicle F at time T" —
+;; as source-backed claims only. A manager naming is a source's own
+;; statement; it is NOT verified ownership or control, NOT a share
+;; percentage, NOT a performance claim, and NOT an endorsement
+;; (manager-naming-is-not-ownership-or-control). The manager role and
+;; the general-partner role are carried as separately-stated roles and
+;; are never collapsed into one "owner" (roles-carried-not-collapsed).
+;; The contract does not rank companies, funds, GPs or LPs, does not
+;; infer ownership stakes, control networks, personal wealth or
+;; returns, and produces no investment advice. Every derived
+;; observation traces back to a source receipt by hash.
 ;;
-;; Method version: v1.1 (2026-09-01). Any change to field semantics bumps
+;; Method version: v1 (2026-09-01). Any change to field semantics bumps
 ;; :method/version and appends a :refresh/history entry; old
 ;; observations are never silently reinterpreted.
-;;
-;; v1.1: adds :conflict-observation — when two allowed first-party
-;; sources disagree about the same (fund-vehicle, portfolio-company)
-;; listing in the same window, the disagreement itself is carried as an
-;; observation with both receipts, and no winner is picked.
 
-{:contract/id :portfolio-listing-observation
- :contract/version "1.1.0"
- :method/version "portfolio-listing-observation.v1.1"
+{:contract/id :fund-manager-affiliation-observation
+ :contract/version "1.0.0"
+ :method/version "fund-manager-affiliation-observation.v1"
  :actor :cloud-itonami/app-public-fund
  :proposes-to :network-awai/app-hyakka
 
@@ -42,9 +38,10 @@
 
  ;; ── Source receipts ────────────────────────────────────────────────
  ;; Every observation cites exactly one receipt, captured verbatim
- ;; (bytes hash + fetch metadata) before any parsing. Portfolio pages
- ;; are first-party statements of the manager/fund that publishes them;
-;; third-party reproductions may only DISCOVER, never back.
+ ;; (bytes hash + fetch metadata) before any parsing. Manager-naming
+ ;; statements are first-party (the fund's or manager's own materials)
+ ;; or official registry records; third-party reproductions may only
+ ;; DISCOVER, never back.
  :source-receipt
  {:schema [:receipt-id :source-url :source-class :source-language
            :observed-at :content-hash :fetch-status]
@@ -53,20 +50,20 @@
                         :official-company-registry}
   :source-class-forbid #{:search-snippet :generated-summary :scraped-directory
                          :social-post :broker-list :paywall-bypass
-                         :captcha-bypass :generated-portfolio-list}
+                         :captcha-bypass :generated-affiliation-list}
   ;; discovery-only pointers can never back a derived observation.
   :source-class-discovery-only #{:news-report :licensed-commercial-aggregator}
   :fetch {:respect-robots? true :respect-auth-waf-captcha? true
-          :user-agent "app-public-fund-portfolio-listing-observation/1.0"}}
+          :user-agent "app-public-fund-manager-affiliation-observation/1.0"}}
 
  ;; ── Typed entity/event inputs ──────────────────────────────────────
  ;; Entity separation is a hard invariant: fund vehicle, management
- ;; company and portfolio company are distinct entities even when they
+ ;; company and general partner are distinct entities even when they
  ;; share a brand name (brand-is-not-legal-entity).
- :entity-types #{:company :fund-vehicle :management-company
-                 :general-partner :jurisdiction}
- :event-types #{:listed-on-portfolio-page :removed-from-portfolio-page
-                :registry-recorded}
+ :entity-types #{:fund-vehicle :management-company :general-partner
+                 :company :jurisdiction}
+ :event-types #{:manager-named :manager-name-changed
+                :general-partner-named :registry-recorded}
  :entity-record
  {:schema [:entity-id :entity-type :name :legal-name :jurisdiction
            :identifier-class :identifier-value :source-receipt-id
@@ -75,24 +72,22 @@
   :note "A brand string never auto-creates a legal entity."}
  :event-record
  {:schema [:event-id :event-type :fund-vehicle-entity-id
-           :portfolio-company-entity-id :observed-at :asserted-at
-           :listing {:kind [:one-of :listed-on-portfolio-page
-                       :removed-from-portfolio-page :unstated]
-                     :as-stated-by-source? true}
-           :source-receipt-id]
-  :invariants #{:portfolio-listing-is-not-ownership-verification
-                :past-listing-is-not-current-holding
-                :listing-kind-is-carried-not-collapsed
-                :fund-vehicle-and-portfolio-company-are-distinct-entities}}
+           :affiliated-entity-id
+           :role {:kind [:one-of :manager :general-partner :unstated]
+                  :as-stated-by-source? true}
+           :observed-at :asserted-at :source-receipt-id]
+  :invariants #{:manager-naming-is-not-ownership-or-control
+                :roles-carried-not-collapsed
+                :fund-vehicle-and-management-company-are-distinct-entities}}
 
  ;; ── Missingness / coverage flags ───────────────────────────────────
  :missingness
- {:flags #{:no-receipt :receipt-unparseable :listing-kind-unstated
-           :fund-vehicle-unstated :jurisdiction-unstated
-           :identifier-unstated :source-language-unmapped
-           :first-party-source-conflict}
+ {:flags #{:no-receipt :receipt-unparseable :role-unstated
+           :fund-vehicle-unstated :affiliated-entity-unstated
+           :jurisdiction-unstated :identifier-unstated
+           :source-language-unmapped :first-party-source-conflict}
   :rule :missing-is-unmeasured
-  :coverage-unit [:jurisdiction :source :language :year :industry :stage
+  :coverage-unit [:jurisdiction :source :language :year
                   :identifier-class]
   :coverage-record
   {:schema [:coverage-unit :unit-key :observed-count :unmeasured-count
@@ -100,52 +95,54 @@
 
  ;; ── Cross-source conflict ──────────────────────────────────────────
  ;; Two allowed first-party sources may disagree about the same
- ;; (fund-vehicle, portfolio-company) listing in the same window — e.g.
- ;; the manager's page lists a company while the official registry
- ;; record does not, or two first-party pages disagree on listing kind
- ;; or on which fund vehicle did the listing. The conflict itself is an
- ;; observation, never an adjudication: each side backs to its own
- ;; receipt, both are carried, no winner is picked, and the
- ;; disagreement is flagged wherever the pair appears downstream
- ;; (missingness flag :first-party-source-conflict). A conflict never
- ;; resolves into an ownership claim or a current-holding claim.
+ ;; (fund-vehicle, role) naming in the same window — e.g. the fund's
+ ;; own page names one management company while the official registry
+ ;; record names another, or the sources disagree on which role was
+ ;; stated. The conflict itself is an observation, never an
+ ;; adjudication: each side backs to its own receipt, both are carried,
+ ;; no winner is picked, and the disagreement is flagged wherever the
+ ;; pair appears downstream (missingness flag
+ ;; :first-party-source-conflict). A conflict never resolves into an
+ ;; ownership or control claim.
  :conflict-observation
  {:schema [:conflict-id :window :fund-vehicle-entity-id
-           :portfolio-company-entity-id :competing-source-receipt-ids
+           :role-kind :competing-source-receipt-ids
            :conflict-kind :observed-at :resolution]
-  :conflict-kinds #{:listed-vs-absent :listing-kind-disagreement
-                    :fund-vehicle-disagreement}
+  :conflict-kinds #{:named-vs-absent :management-company-disagreement
+                    :role-disagreement}
   :resolution :carry-both-never-resolve
   :invariants #{:conflict-is-observation-not-adjudication
                 :each-side-backs-to-its-own-receipt
-                :conflict-never-resolves-into-ownership-or-current-holding}}
+                :conflict-never-resolves-into-ownership-or-control}}
 
  ;; ── Derived observation ────────────────────────────────────────────
- ;; The only derived artifact is an observation of portfolio-page
- ;; listing states within a window. No ranking, scoring, returns,
- ;; ownership or suitability field exists in this shape by construction.
+ ;; The only derived artifact is an observation of manager/GP naming
+ ;; states within a window. No ranking, scoring, returns, ownership,
+ ;; control or suitability field exists in this shape by construction.
  :derived-observation
  {:schema [:observation-id :method/version :window
            :observation-kind :fund-vehicle-entity-id
-           :portfolio-company-entity-id :event-id
-           :value {:kind [:one-of :listing-state-count
-                    :listing-observation :removal-observation]
+           :affiliated-entity-id :event-id
+           :value {:kind [:one-of :affiliation-observation
+                    :affiliation-change-observation
+                    :affiliation-state-count]
                    :basis #{:receipt-only}}
            :missingness-flags :provenance-chain
            :asserted-at]
-  :observation-kinds #{:listed-on-portfolio-page-in-window
-                       :removed-from-portfolio-page-in-window
-                       :listing-state-in-window}
+  :observation-kinds #{:manager-named-in-window
+                       :general-partner-named-in-window
+                       :manager-name-changed-in-window
+                       :affiliation-state-in-window}
   :forbidden-fields #{:rank :score :centrality :returns :irr :moic
-                      :ownership-stake :suitability :recommendation
-                      :current-valuation :holding-verification}}
+                      :ownership-stake :control-percentage :suitability
+                      :recommendation :current-valuation}}
 
  ;; ── Refresh history ────────────────────────────────────────────────
- ;; Append-only. A re-observation of the same entity/window with a newer
- ;; method version appends; it never edits prior entries. A name
- ;; disappearing from a page is a NEW :removed-from-portfolio-page
- ;; observation plus a history entry — the earlier listing observation
- ;; is never overwritten or deleted.
+ ;; Append-only. A re-observation of the same entity/window with a
+ ;; newer method version appends; it never edits prior entries. A
+ ;; naming change is a NEW :manager-name-changed observation plus a
+ ;; history entry — the earlier naming observation is never
+;; overwritten or deleted.
  :refresh-history
  {:schema [:history-id :observation-id :re-observed-at
            :reason {:kind [:one-of :window-advanced :source-updated
@@ -155,17 +152,17 @@
   :rule :reclassification-appends-does-not-overwrite}
 
  ;; ── Hyakka proposal ────────────────────────────────────────────────
- ;; Auditable QUESTIONS over the observation records, e.g. "how many
- ;; distinct portfolio companies were listed by fund vehicle F's
- ;; first-party page in window W, with receipts?" — each question
+ ;; Auditable QUESTIONS over the observation records, e.g. "which
+ ;; which management companies were named as manager for fund vehicle F
+ ;; by first-party sources in window W, with receipts?" — each question
  ;; carries its own coverage and missingness statement.
  :hyakka-proposal
  {:schema [:proposal-id :question-text :over-observation-kind
            :window :coverage-record-ref :missingness-flags
            :disclaimer]
   :disclaimer
-  "Observations only. A portfolio page listing is the manager's own
-   statement, not verified ownership, endorsement, performance or
+  "Observations only. A manager naming is a source's own statement,
+   not verified ownership or control, endorsement, performance or
    investment suitability. No investment advice."}
 
  ;; ── Query / readback shape ─────────────────────────────────────────
@@ -175,8 +172,7 @@
  :query-readback
  {:request-schema [:query-id :observation-kind :window
                    :filter {:keys #{:jurisdiction :fund-vehicle-entity-id
-                                    :portfolio-company-entity-id
-                                    :listing-kind}}]
+                                    :affiliated-entity-id :role-kind}}]
   :response-schema [:query-id :status
                     :observations [:observation-id]
                     :coverage-record-ref
