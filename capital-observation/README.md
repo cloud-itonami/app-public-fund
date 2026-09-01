@@ -31,3 +31,32 @@ nbb tools/capital_observation_fixtures.cljs
 
 Exit codes: `0` all fixtures ran clean · `1` a violation was found ·
 `2` REFUSED (contract could not be read).
+
+## Portfolio listing observation contract (`portfolio-listing-observation.edn`)
+
+`portfolio-listing-observation.edn` is a bounded actor contract for
+observing **portfolio-page listings** — "source S listed company C on
+fund F's portfolio page at time T" — as first-party, hash-backed claims,
+proposed to Hyakka as auditable questions.
+
+- A portfolio page listing is the manager's own statement about its own
+  page. It is **not** verified ownership, a current holding, an
+  endorsement or a performance claim
+  (`portfolio-listing-is-not-ownership-verification`,
+  `past-listing-is-not-current-holding`). A name disappearing from the
+  page is recorded as its own `:removed-from-portfolio-page` event — the
+  earlier listing observation is never overwritten or deleted.
+- Only first-party sources (fund / manager / registry) may back a derived
+  observation; news reports are discovery-only. Same guarantees as above:
+  hash-backed receipts, entity separation (fund vehicle, management
+  company and portfolio company stay distinct even when they share a
+  brand), time-bounded windows, missingness flags, append-only refresh
+  history, no rank/score/returns/ownership/suitability fields,
+  questions-only Hyakka proposal, and a deterministic readback that
+  always carries coverage + missingness.
+
+Verify deterministically (offline, no network):
+
+```bash
+nbb tools/portfolio_listing_fixtures.cljs
+```
