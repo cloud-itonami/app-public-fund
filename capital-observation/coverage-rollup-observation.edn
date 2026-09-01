@@ -1,0 +1,121 @@
+;; coverage-rollup-observation.edn — bounded actor contract for rolling up
+;; COVERAGE and MISSINGNESS across the app-public-fund capital-observation
+;; kinds, proposed to Hyakka (network-awai/app-hyakka) as auditable questions.
+;;
+;; This is a compositional improvement to the actor's existing contracts
+;; (fund-close-observation.v1 on main; lp-commitment / financing-round /
+;; observation-readback on open PRs). It defines NO new observation
+;; semantics: it aggregates the per-window :coverage-record values that the
+;; underlying contracts already emit, per coverage-unit × observation-kind.
+;;
+;; Scope guard: a coverage rollup is a measurement-of-measurement. It says
+;; how much of a window is measured and what is unmeasured. It never says
+;; how much money moved, who owns what, or how good anything is. Every
+;; rollup row is traceable to the observation kinds that produced it.
+;; Method version: coverage-rollup-observation.v1 (2026-09-01).
+
+{:contract/id :coverage-rollup-observation
+ :contract/version "1.0.0"
+ :method/version "coverage-rollup-observation.v1"
+ :actor :cloud-itonami/app-public-fund
+ :proposes-to :network-awai/app-hyakka
+ :composes-with [:fund-close-observation        ; any contract exposing
+                 :lp-commitment-observation     ; :missingness/coverage-record
+                 :financing-round-observation]  ; per observation kind
+
+ ;; ── Rollup window ──────────────────────────────────────────────────
+ ;; Same window shape as the underlying contracts: [from, until) UTC.
+ ;; A rollup window MUST be exactly the window its input coverage records
+ ;; were emitted for — a rollup never stitches two windows together.
+ :window
+ {:schema [:from :until :declared-at :timezone]
+  :format "YYYY-MM-DD"
+  :closed? false
+  :rule :rollup-window-equals-input-window-no-stitching}
+
+ ;; ── Input provenance ───────────────────────────────────────────────
+ ;; Every rollup cites the coverage records it aggregated. Coverage
+ ;; records are derived (not receipts), so the rollup carries a
+ ;; provenance CHAIN: coverage-record-ref → observation ids → receipt
+ ;; hashes, and refuses inputs whose chain is not resolvable.
+ :input-coverage-record
+ {:schema [:coverage-record-ref :observation-kind :method/version
+           :window :coverage-unit :unit-key
+           :observed-count :unmeasured-count
+           :source-receipt-hashes]
+  :rule :unresolvable-provenance-chain-refuses-input
+  ;; method/version separation: inputs from different method versions are
+  ;; never mixed in one rollup. Cross-version rollups are separate
+  ;; rollups, compared by unit-key, never implicitly merged.
+  :version-separation :one-method-version-per-rollup}
+
+ ;; ── Derived rollup row ─────────────────────────────────────────────
+ :derived-rollup
+ {:schema [:rollup-id :method/version :window
+           :rollup-kind :coverage-unit :unit-key
+           :per-kind {:observed-count :unmeasured-count}
+           :total-observed-count :total-unmeasured-count
+           :missingness-flags :provenance-chain
+           :asserted-at]
+  :rollup-kinds #{:coverage-in-window}
+  :invariant :counts-are-sums-of-input-counts-not-recomputed
+  :rule :every-unmeasured-unit-row-is-emitted
+  ;; An unmeasured unit (0 observed, N unmeasured) is a row, not silence.
+  ;; Missingness flags propagate: a row containing any input flagged
+  ;; :no-receipt or :receipt-unparseable carries those flags forward.
+  :flag-propagation #{:no-receipt :receipt-unparseable :amount-not-stated
+                      :close-kind-unstated :jurisdiction-unstated
+                      :source-language-unmapped
+                      :commitment-amount-not-stated
+                      :round-kind-unstated}
+  ;; Structurally excluded fields — a coverage rollup must not become a
+  ;; leaderboard, a total-raise figure or a completeness score.
+  :forbidden-fields #{:rank :score :centrality :nav :ownership-stake
+                      :suitability :recommendation :current-valuation
+                      :aggregate-amount :completeness-score
+                      :data-quality-score}}
+
+ ;; ── Refresh history ────────────────────────────────────────────────
+ ;; Append-only, same discipline as the underlying contracts. Re-running
+ ;; a rollup over the same window + method/version with unchanged inputs
+ ;; must reproduce byte-identical rows; changed inputs append a new
+ ;; history entry and never edit prior rows.
+ :refresh-history
+ {:schema [:history-id :rollup-id :re-observed-at
+           :reason {:kind [:one-of :window-advanced :inputs-updated
+                            :method-version-bumped]}
+           :changed-fields]
+  :append-only? true
+  :rule :same-inputs-same-window-same-version-byte-identical}
+
+ ;; ── Query / readback shape ─────────────────────────────────────────
+ ;; Reads go through the same discipline as observation-readback.v1:
+ ;; opaque cursor, one method/version per page, every response (including
+ ;; empty) carries the rollup's provenance-chain ref and missingness
+ ;; flags; :unmeasured is never rendered as zero.
+ :query-readback
+ {:schema [:query-id :status :page :rollup-rows
+           :coverage-record-ref :missingness-flags :empty-reason]
+  :page {:cursor-next [:one-of :cursor-string :nil]
+         :page-size :returned-count :has-more :bool}
+  :rollup-rows [:rollup-id]
+  :coverage-record-ref :coverage-record-ref
+  :missingness-flags :missingness-flags
+  :empty-reason [:one-of :nil :no-coverage-records-in-window
+                 :kind-not-observed :window-out-of-coverage]
+  :status-values #{:ok :unmeasured :out-of-window :bad-request}
+  :fields-in-page #{:rollup-id}
+  :rule :unmeasured-is-not-zero}
+
+ ;; ── Hyakka proposal (questions only) ───────────────────────────────
+ ;; Auditable questions this shape enables, e.g.: "Within window W and
+ ;; method version V, which coverage-unit keys were observed at all for
+ ;; financing-round observations, and which were only unmeasured?" — the
+ ;; answer is a list of unit keys with counts, not a score.
+ :hyakka-proposal
+ {:schema [:proposal-id :question-text :over-rollup-window
+           :assert :every-unmeasured-unit-is-a-row-not-silence
+           :disclaimer]
+  :disclaimer
+  "Coverage/missingness accounting only. Not performance, ownership,
+   endorsement or investment suitability. No investment advice."}}

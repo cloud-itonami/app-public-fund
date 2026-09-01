@@ -92,3 +92,21 @@ the underlying contract's own readback).
 ```bash
 nbb tools/observation_readback_fixtures.cljs
 ```
+## Coverage rollup contract
+
+`coverage-rollup-observation.edn`
+(`coverage-rollup-observation.v1`) is a compositional contract that
+aggregates the per-window coverage records the observation kinds already
+emit, per coverage-unit × observation-kind. It is measurement of
+measurement: how much of a window is measured and what is unmeasured.
+No new observation semantics, no aggregate amounts, no completeness
+score — unmeasured units are emitted as rows, never silence, and
+`aggregate-amount` / `completeness-score` / `rank` are structurally
+forbidden. Same window shape, append-only refresh history, and readback
+discipline (one method/version per page, every response carries
+coverage + missingness, `:unmeasured` is not zero).
+
+```bash
+nbb tools/coverage_rollup_fixtures.cljs
+```
+
