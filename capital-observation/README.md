@@ -10,12 +10,29 @@ What it is:
   bytes), typed entity/event inputs with hard entity separation (a venture
   firm, a fund vehicle and a GP are distinct entities even under one brand),
   time-bounded measurement windows (`[from, until)`), a method/version pin
-  (`fund-close-observation.v1`), missingness/coverage flags
+  (`fund-close-observation.v2`), missingness/coverage flags
   (`missing-is-unmeasured`), derived observations that structurally exclude
   rank/score/centrality/ownership/suitability fields, an append-only refresh
   history, a Hyakka proposal shape (questions only, never advice), and a
   deterministic query/readback shape that always carries coverage +
   missingness.
+
+v2 additions (2026-09-01):
+
+- **Event-level provenance**: `:provenance-chain` is required on every
+  event, not only on derived observations. An event with no traceable
+  receipt chain is unmeasured (`:provenance-chain-incomplete`).
+- **Identifier invariants**: one `:identifier-value` never denotes two
+  different entity types, and one entity id carries exactly one identifier
+  value. A missing identifier is `:identifier-unstated`, never guessed from
+  a brand string.
+- **Receipt disagreement is recorded, never resolved**: two allow-class
+  receipts stating different facts about the same event produce a
+  `:receipt-disagreement` flagged observation with ALL conflicting receipt
+  ids in its chain and value `:unmeasured` — the contract never picks a
+  winner.
+- **Fetch-status admission**: a receipt whose fetch was not fully `:ok`
+  backs no observation and flags `:fetch-status-non-ok`.
 
 What it is not:
 
