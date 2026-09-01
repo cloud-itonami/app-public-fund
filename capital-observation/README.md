@@ -46,5 +46,33 @@ Verify deterministically (offline, no network):
 nbb tools/capital_observation_fixtures.cljs
 ```
 
+## LP-commitment observation (`lp-commitment-observation.v1`)
+
+`lp-commitment-observation.edn` is a second bounded contract in this
+directory, observing **stated LP commitments** to funds with provenance.
+
+What it adds beyond fund-close:
+
+- Observes commitments **as stated** by allowed sources only
+  (institutional-LP first-party, fund first-party, official regulator /
+  securities filings). A discovery-only receipt (e.g. a news report
+  naming an LP) can never back a derived observation — that is
+  `:inferred-lp`, i.e. unmeasured here (fixture `allowed-source-only`).
+- Entity separation across the LP plane: limited-partner vehicle,
+  LP management organization, fund vehicle and GP are distinct entities
+  even under one brand; LP and fund are distinct entity ids inside every
+  event.
+- `lp-commitment-is-not-current-nav-or-ownership`: a stated commitment
+  is a capital pledge, never NAV, valuation or ownership stake; kinds
+  (`stated-commitment` / `-amendment` / `stated-redemption`) are carried,
+  not collapsed, and `:nav` / `:ownership-stake` / `:personal-wealth`
+  are structurally forbidden fields.
+
+Verify deterministically (offline, no network):
+
+```bash
+nbb tools/lp_commitment_fixtures.cljs
+```
+
 Exit codes: `0` all fixtures ran clean · `1` a violation was found ·
 `2` REFUSED (contract could not be read).
