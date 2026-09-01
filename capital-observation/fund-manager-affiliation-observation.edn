@@ -1,0 +1,181 @@
+;; fund-manager-affiliation-observation.edn — bounded actor contract for
+;; observing PUBLIC first-party/registry statements of which management
+;; company (and, as separately stated, which general partner) is named
+;; for a fund vehicle, proposed to Hyakka (network-awai/app-hyakka) as
+;; auditable questions, not as a score.
+;;
+;; Scope guard: this contract observes NAMING EVENTS — "source S named
+;; management company M as the manager of fund vehicle F at time T" —
+;; as source-backed claims only. A manager naming is a source's own
+;; statement; it is NOT verified ownership or control, NOT a share
+;; percentage, NOT a performance claim, and NOT an endorsement
+;; (manager-naming-is-not-ownership-or-control). The manager role and
+;; the general-partner role are carried as separately-stated roles and
+;; are never collapsed into one "owner" (roles-carried-not-collapsed).
+;; The contract does not rank companies, funds, GPs or LPs, does not
+;; infer ownership stakes, control networks, personal wealth or
+;; returns, and produces no investment advice. Every derived
+;; observation traces back to a source receipt by hash.
+;;
+;; Method version: v1 (2026-09-01). Any change to field semantics bumps
+;; :method/version and appends a :refresh/history entry; old
+;; observations are never silently reinterpreted.
+
+{:contract/id :fund-manager-affiliation-observation
+ :contract/version "1.0.0"
+ :method/version "fund-manager-affiliation-observation.v1"
+ :actor :cloud-itonami/app-public-fund
+ :proposes-to :network-awai/app-hyakka
+
+ ;; ── Measurement window ─────────────────────────────────────────────
+ ;; Half-open [from, until) in UTC ISO-8601 dates. "missing" inside a
+ ;; window means "not measured in this window", never "nothing changed".
+ :window
+ {:schema [:from :until :declared-at :timezone]
+  :format "YYYY-MM-DD"
+  :closed? false                       ; [from, until)
+  :rule :window-must-not-overlap-within-same-source-and-method}
+
+ ;; ── Source receipts ────────────────────────────────────────────────
+ ;; Every observation cites exactly one receipt, captured verbatim
+ ;; (bytes hash + fetch metadata) before any parsing. Manager-naming
+ ;; statements are first-party (the fund's or manager's own materials)
+ ;; or official registry records; third-party reproductions may only
+ ;; DISCOVER, never back.
+ :source-receipt
+ {:schema [:receipt-id :source-url :source-class :source-language
+           :observed-at :content-hash :fetch-status]
+  :content-hash {:algo "sha256" :of "response-body-bytes"}
+  :source-class-allow #{:fund-first-party :manager-first-party
+                        :official-company-registry}
+  :source-class-forbid #{:search-snippet :generated-summary :scraped-directory
+                         :social-post :broker-list :paywall-bypass
+                         :captcha-bypass :generated-affiliation-list}
+  ;; discovery-only pointers can never back a derived observation.
+  :source-class-discovery-only #{:news-report :licensed-commercial-aggregator}
+  :fetch {:respect-robots? true :respect-auth-waf-captcha? true
+          :user-agent "app-public-fund-manager-affiliation-observation/1.0"}}
+
+ ;; ── Typed entity/event inputs ──────────────────────────────────────
+ ;; Entity separation is a hard invariant: fund vehicle, management
+ ;; company and general partner are distinct entities even when they
+ ;; share a brand name (brand-is-not-legal-entity).
+ :entity-types #{:fund-vehicle :management-company :general-partner
+                 :company :jurisdiction}
+ :event-types #{:manager-named :manager-name-changed
+                :general-partner-named :registry-recorded}
+ :entity-record
+ {:schema [:entity-id :entity-type :name :legal-name :jurisdiction
+           :identifier-class :identifier-value :source-receipt-id
+           :asserted-at :observed-at]
+  :invariant :one-entity-type-per-entity-id
+  :note "A brand string never auto-creates a legal entity."}
+ :event-record
+ {:schema [:event-id :event-type :fund-vehicle-entity-id
+           :affiliated-entity-id
+           :role {:kind [:one-of :manager :general-partner :unstated]
+                  :as-stated-by-source? true}
+           :observed-at :asserted-at :source-receipt-id]
+  :invariants #{:manager-naming-is-not-ownership-or-control
+                :roles-carried-not-collapsed
+                :fund-vehicle-and-management-company-are-distinct-entities}}
+
+ ;; ── Missingness / coverage flags ───────────────────────────────────
+ :missingness
+ {:flags #{:no-receipt :receipt-unparseable :role-unstated
+           :fund-vehicle-unstated :affiliated-entity-unstated
+           :jurisdiction-unstated :identifier-unstated
+           :source-language-unmapped :first-party-source-conflict}
+  :rule :missing-is-unmeasured
+  :coverage-unit [:jurisdiction :source :language :year
+                  :identifier-class]
+  :coverage-record
+  {:schema [:coverage-unit :unit-key :observed-count :unmeasured-count
+            :window :method/version]}}
+
+ ;; ── Cross-source conflict ──────────────────────────────────────────
+ ;; Two allowed first-party sources may disagree about the same
+ ;; (fund-vehicle, role) naming in the same window — e.g. the fund's
+ ;; own page names one management company while the official registry
+ ;; record names another, or the sources disagree on which role was
+ ;; stated. The conflict itself is an observation, never an
+ ;; adjudication: each side backs to its own receipt, both are carried,
+ ;; no winner is picked, and the disagreement is flagged wherever the
+ ;; pair appears downstream (missingness flag
+ ;; :first-party-source-conflict). A conflict never resolves into an
+ ;; ownership or control claim.
+ :conflict-observation
+ {:schema [:conflict-id :window :fund-vehicle-entity-id
+           :role-kind :competing-source-receipt-ids
+           :conflict-kind :observed-at :resolution]
+  :conflict-kinds #{:named-vs-absent :management-company-disagreement
+                    :role-disagreement}
+  :resolution :carry-both-never-resolve
+  :invariants #{:conflict-is-observation-not-adjudication
+                :each-side-backs-to-its-own-receipt
+                :conflict-never-resolves-into-ownership-or-control}}
+
+ ;; ── Derived observation ────────────────────────────────────────────
+ ;; The only derived artifact is an observation of manager/GP naming
+ ;; states within a window. No ranking, scoring, returns, ownership,
+ ;; control or suitability field exists in this shape by construction.
+ :derived-observation
+ {:schema [:observation-id :method/version :window
+           :observation-kind :fund-vehicle-entity-id
+           :affiliated-entity-id :event-id
+           :value {:kind [:one-of :affiliation-observation
+                    :affiliation-change-observation
+                    :affiliation-state-count]
+                   :basis #{:receipt-only}}
+           :missingness-flags :provenance-chain
+           :asserted-at]
+  :observation-kinds #{:manager-named-in-window
+                       :general-partner-named-in-window
+                       :manager-name-changed-in-window
+                       :affiliation-state-in-window}
+  :forbidden-fields #{:rank :score :centrality :returns :irr :moic
+                      :ownership-stake :control-percentage :suitability
+                      :recommendation :current-valuation}}
+
+ ;; ── Refresh history ────────────────────────────────────────────────
+ ;; Append-only. A re-observation of the same entity/window with a
+ ;; newer method version appends; it never edits prior entries. A
+ ;; naming change is a NEW :manager-name-changed observation plus a
+ ;; history entry — the earlier naming observation is never
+;; overwritten or deleted.
+ :refresh-history
+ {:schema [:history-id :observation-id :re-observed-at
+           :reason {:kind [:one-of :window-advanced :source-updated
+                     :event-reclassified :method-version-bumped]}
+           :changed-fields]
+  :append-only? true
+  :rule :reclassification-appends-does-not-overwrite}
+
+ ;; ── Hyakka proposal ────────────────────────────────────────────────
+ ;; Auditable QUESTIONS over the observation records, e.g. "which
+ ;; which management companies were named as manager for fund vehicle F
+ ;; by first-party sources in window W, with receipts?" — each question
+ ;; carries its own coverage and missingness statement.
+ :hyakka-proposal
+ {:schema [:proposal-id :question-text :over-observation-kind
+           :window :coverage-record-ref :missingness-flags
+           :disclaimer]
+  :disclaimer
+  "Observations only. A manager naming is a source's own statement,
+   not verified ownership or control, endorsement, performance or
+   investment suitability. No investment advice."}
+
+ ;; ── Query / readback shape ─────────────────────────────────────────
+ ;; Deterministic readback: a question id + window returns observations
+ ;; plus the exact coverage statement that bounds them, or an explicit
+ ;; :unmeasured response. Unknown keys are rejected, not ignored.
+ :query-readback
+ {:request-schema [:query-id :observation-kind :window
+                   :filter {:keys #{:jurisdiction :fund-vehicle-entity-id
+                                    :affiliated-entity-id :role-kind}}]
+  :response-schema [:query-id :status
+                    :observations [:observation-id]
+                    :coverage-record-ref
+                    :missingness-flags]
+  :status-values #{:ok :unmeasured :out-of-window}
+  :rule :readback-must-carry-coverage-and-missingness}}
