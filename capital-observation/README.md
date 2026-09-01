@@ -68,3 +68,41 @@ Verify deterministically (offline, no network):
 ```bash
 nbb tools/portfolio_listing_fixtures.cljs
 ```
+
+## Fund-manager affiliation observation contract (`fund-manager-affiliation-observation.edn`)
+
+`fund-manager-affiliation-observation.edn` is a bounded actor contract
+for observing **manager / general-partner naming** — "source S named
+management company M as the manager of fund vehicle F at time T" — as
+first-party or registry-backed, hash-backed claims, proposed to Hyakka
+as auditable questions.
+
+- A manager naming is a source's own statement. It is **not** verified
+  ownership or control, a share percentage, an endorsement, a
+  performance claim or investment suitability
+  (`manager-naming-is-not-ownership-or-control`).
+- The manager role and the general-partner role are carried as
+  **separately-stated roles** and are never collapsed into one "owner"
+  (`roles-carried-not-collapsed`).
+- Only first-party sources (fund / manager / official registry) may
+  back a derived observation; news reports are discovery-only. Same
+  guarantees as the other contracts: sha256-backed verbatim receipts,
+  hard entity separation (a brand string never merges a management
+  company across jurisdictions or across the GP/manager boundary),
+  half-open time-bounded windows, missingness flags
+  (`missing-is-unmeasured`), append-only refresh history, no
+  rank/score/returns/ownership/control/suitability fields by
+  construction, questions-only Hyakka proposal, and a deterministic
+  readback that always carries coverage + missingness.
+- **Cross-source conflict**: when two allowed first-party sources
+  disagree about the same (fund-vehicle, role) naming in the same
+  window, the disagreement is carried as a `:conflict-observation`
+  with both receipts. Resolution is always
+  `:carry-both-never-resolve` — no winner is picked, and a conflict
+  never resolves into an ownership or control claim.
+
+Verify deterministically (offline, no network):
+
+```bash
+nbb tools/manager_affiliation_fixtures.cljs
+```
