@@ -246,3 +246,42 @@ What these are not:
 
 Exit codes for both fixture runners: `0` all fixtures ran clean · `1` a
 violation was found · `2` REFUSED (contract could not be read).
+
+## Round participant observation contract (`round-participant-observation.edn`)
+
+`round-participant-observation.edn` is a bounded actor contract for
+observing **financing-round participant naming** — "source S named
+entity P as a participant in financing round R at time T" — as
+first-party or registry-backed, hash-backed claims, proposed to Hyakka
+as auditable questions.
+
+- A participant naming is a source's own statement. It is **not**
+  verified ownership, a share percentage, an endorsement, a
+  co-investment network edge, a performance/momentum claim or
+  investment suitability
+  (`participant-naming-is-not-ownership-or-endorsement`).
+- Participant roles (lead-participant / participant / co-investor /
+  unstated) are carried as **separately-stated roles** and are never
+  collapsed (`roles-carried-not-collapsed`).
+- Only first-party sources (company / participant / official registry)
+  may back a derived observation; news reports are discovery-only. Same
+  guarantees as the other contracts: sha256-backed verbatim receipts,
+  hard entity separation (round, company, investor entity and GP stay
+  distinct even when they share a brand), half-open time-bounded
+  windows, missingness flags (`missing-is-unmeasured`), append-only
+  refresh history, no rank/score/centrality/graph-edge/returns/
+  ownership/suitability fields by construction, questions-only Hyakka
+  proposal, and a deterministic readback that always carries coverage +
+  missingness.
+- **Cross-source conflict**: when two allowed first-party sources
+  disagree about the same (financing-round, participant) naming in the
+  same window, the disagreement is carried as a `:conflict-observation`
+  with both receipts. Resolution is always `:carry-both-never-resolve`
+  — no winner is picked, and a conflict never resolves into an
+  ownership or endorsement claim.
+
+Verify deterministically (offline, no network):
+
+```bash
+nbb tools/round_participant_fixtures.cljs
+```
