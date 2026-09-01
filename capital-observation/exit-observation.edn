@@ -1,0 +1,153 @@
+;; exit-observation.edn — bounded actor contract for observing PUBLIC
+;; exit events (acquisition, IPO listing, liquidation) around fund and
+;; portfolio entities, proposed to Hyakka (network-awai/app-hyakka) as
+;; auditable questions, not as a score.
+;;
+;; Scope guard: this contract observes exit EVENTS as source-backed
+;; claims only. It does NOT rank companies, funds, GPs or LPs, does not
+;; infer ownership, personal wealth or returns, and produces no
+;; investment advice. An announced exit is not a completed exit
+;; (announced-target-is-not-closed-fund-size, same epistemic family),
+;; and an estimated valuation is never recorded as a verified one
+;; (estimated-valuation-is-not-verified-valuation). Every derived
+;; observation traces back to a source receipt by hash.
+;;
+;; Method version: v1 (2026-09-01). Any change to field semantics bumps
+;; :method/version and appends a :refresh/history entry; old observations
+;; are never silently reinterpreted.
+
+{:contract/id :exit-observation
+ :contract/version "1.0.0"
+ :method/version "exit-observation.v1"
+ :actor :cloud-itonami/app-public-fund
+ :proposes-to :network-awai/app-hyakka
+
+ ;; ── Measurement window ─────────────────────────────────────────────
+ ;; Half-open [from, until) in UTC ISO-8601 dates. "missing" inside a
+ ;; window means "not measured in this window", never "nothing happened".
+ :window
+ {:schema [:from :until :declared-at :timezone]
+  :format "YYYY-MM-DD"
+  :closed? false                       ; [from, until)
+  :rule :window-must-not-overlap-within-same-source-and-method}
+
+ ;; ── Source receipts ────────────────────────────────────────────────
+ ;; Every observation cites exactly one receipt, captured verbatim
+ ;; (bytes hash + fetch metadata) before any parsing.
+ :source-receipt
+ {:schema [:receipt-id :source-url :source-class :source-language
+           :observed-at :content-hash :fetch-status]
+  :content-hash {:algo "sha256" :of "response-body-bytes"}
+  :source-class-allow #{:official-regulator :official-stock-exchange-filing
+                        :official-company-registry :company-first-party
+                        :fund-first-party :manager-first-party
+                        :official-board-record}
+  :source-class-forbid #{:search-snippet :generated-summary :scraped-directory
+                         :social-post :broker-list :paywall-bypass
+                         :captcha-bypass}
+  ;; discovery-only pointers can never back a derived observation.
+  :source-class-discovery-only #{:news-report :licensed-commercial-aggregator}
+  :fetch {:respect-robots? true :respect-auth-waf-captcha? true
+          :user-agent "app-public-fund-exit-observation/1.0"}}
+
+ ;; ── Typed entity/event inputs ──────────────────────────────────────
+ ;; Entity separation is a hard invariant: acquirer, target, fund
+ ;; vehicle and management company are distinct entities even when they
+ ;; share a brand name (brand-is-not-legal-entity).
+ :entity-types #{:company :fund-vehicle :management-company
+                 :general-partner :acquirer :target :jurisdiction}
+ :event-types #{:exit-announced :acquisition-completed :ipo-listed
+                :liquidation-filed}
+ :entity-record
+ {:schema [:entity-id :entity-type :name :legal-name :jurisdiction
+           :identifier-class :identifier-value :source-receipt-id
+           :asserted-at :observed-at]
+  :invariant :one-entity-type-per-entity-id
+  :note "A brand string never auto-creates a legal entity."}
+ :event-record
+ {:schema [:event-id :event-type :entity-id :announced-at :asserted-at
+           :consideration {:kind [:one-of :announced-consideration
+                             :completed-consideration :unstated]
+                           :currency :string
+                           :as-stated-by-source? true}
+           :valuation {:kind [:one-of :estimated-valuation :stated-listing
+                         :none]}
+           :source-receipt-id]
+  ;; announced exit is not a completed exit; the two kinds are carried,
+  ;; never collapsed. An estimated valuation is carried as ESTIMATED
+  ;; only and is never written into a verified field.
+  :invariants #{:announced-exit-is-not-completed-exit
+                :estimated-valuation-is-not-verified-valuation
+                :consideration-kind-is-carried-not-collapsed}}
+
+ ;; ── Missingness / coverage flags ───────────────────────────────────
+ :missingness
+ {:flags #{:no-receipt :receipt-unparseable :consideration-not-stated
+           :event-kind-unstated :acquirer-unstated :jurisdiction-unstated
+           :source-language-unmapped}
+  :rule :missing-is-unmeasured
+  :coverage-unit [:jurisdiction :source :language :year :industry :stage
+                  :identifier-class]
+  :coverage-record
+  {:schema [:coverage-unit :unit-key :observed-count :unmeasured-count
+            :window :method/version]}}
+
+ ;; ── Derived observation ────────────────────────────────────────────
+ ;; The only derived artifact is an observation of exit events within a
+ ;; window. No ranking, scoring, returns, ownership or suitability field
+ ;; exists in this shape by construction.
+ :derived-observation
+ {:schema [:observation-id :method/version :window
+           :observation-kind :entity-id :event-id
+           :value {:kind [:one-of :exit-event-count :consideration-observation
+                    :valuation-kind-observation]
+                   :basis #{:receipt-only}}
+           :missingness-flags :provenance-chain
+           :asserted-at]
+  :observation-kinds #{:exit-announced-in-window :acquisition-completed-in-window
+                       :ipo-listed-in-window :liquidation-filed-in-window
+                       :consideration-in-window}
+  :forbidden-fields #{:rank :score :centrality :returns :irr :moic
+                      :ownership-stake :suitability :recommendation
+                      :current-valuation}}
+
+ ;; ── Refresh history ────────────────────────────────────────────────
+ ;; Append-only. A re-observation of the same entity/window with a newer
+ ;; method version appends; it never edits prior entries.
+ :refresh-history
+ {:schema [:history-id :observation-id :re-observed-at
+           :reason {:kind [:one-of :window-advanced :source-updated
+                     :event-reclassified :method-version-bumped]}
+           :changed-fields]
+  :append-only? true
+  ;; An announced exit later observed as completed is a NEW observation
+  ;; plus a history entry — the announced record is never overwritten.
+  :rule :reclassification-appends-does-not-overwrite}
+
+ ;; ── Hyakka proposal ────────────────────────────────────────────────
+ ;; Auditable QUESTIONS over the observation records, e.g. "how many
+ ;; ipo-listed events were observed with receipts in jurisdiction J
+ ;; within window W?" — each question carries its own coverage and
+ ;; missingness statement.
+ :hyakka-proposal
+ {:schema [:proposal-id :question-text :over-observation-kind
+           :window :coverage-record-ref :missingness-flags
+           :disclaimer]
+  :disclaimer
+  "Observations only. Not performance, ownership, endorsement or
+   investment suitability. No investment advice."}
+
+ ;; ── Query / readback shape ─────────────────────────────────────────
+ ;; Deterministic readback: a question id + window returns observations
+ ;; plus the exact coverage statement that bounds them, or an explicit
+ ;; :unmeasured response. Unknown keys are rejected, not ignored.
+ :query-readback
+ {:request-schema [:query-id :observation-kind :window
+                   :filter {:keys #{:jurisdiction :entity-type
+                                    :event-type :consideration-kind}}]
+  :response-schema [:query-id :status
+                    :observations [:observation-id]
+                    :coverage-record-ref
+                    :missingness-flags]
+  :status-values #{:ok :unmeasured :out-of-window}
+  :rule :readback-must-carry-coverage-and-missingness}}
