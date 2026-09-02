@@ -12,13 +12,22 @@
 ;; or-ownership), and produces no investment advice. Every derived
 ;; observation traces back to a source receipt by hash.
 ;;
-;; Method version: v1 (2026-09-01). Any change to field semantics bumps
+;; Method version: v2 (2026-09-02). Any change to field semantics bumps
 ;; :method/version and appends a :refresh/history entry; old observations
 ;; are never silently reinterpreted.
+;;
+;; v2 additions (2026-09-02):
+;;   * :provenance-chain required on EVERY event and entity record (not
+;;     just derived observations)
+;;   * identifier invariants (one identifier value per entity type; one
+;;     identifier per entity id; missing = :identifier-unstated)
+;;   * :receipt-disagreement is RECORDED, never resolved
+;;   * :fetch-status-non-ok receipt backs no derived observation
+;;   * discovery-only source classes appear in NO provenance chain
 
 {:contract/id :lp-commitment-observation
- :contract/version "1.0.0"
- :method/version "lp-commitment-observation.v1"
+ :contract/version "2.0.0"
+ :method/version "lp-commitment-observation.v2"
  :actor :cloud-itonami/app-public-fund
  :proposes-to :network-awai/app-hyakka
 
@@ -48,10 +57,21 @@
                          :inferred-personal-wealth}
   ;; news-report and licensed-commercial-aggregator may be carried as
   ;; discovery-only pointers; they can NEVER back a derived observation
-  ;; (an LP named only by news is :inferred-lp, i.e. unmeasured here).
+  ;; (an LP named only by news is :inferred-lp, i.e. unmeasured here),
+  ;; and they appear in NO provenance chain.
   :source-class-discovery-only #{:news-report :licensed-commercial-aggregator}
+  :discovery-only-rule :discovery-only-appears-in-no-provenance-chain
   :fetch {:respect-robots? true :respect-auth-waf-captcha? true
-          :user-agent "app-public-fund-capital-observation/1.0"}}
+          :user-agent "app-public-fund-capital-observation/2.0"}}
+
+ ;; ── Receipt admission (v2) ─────────────────────────────────────────
+ ;; Only a fully-successful fetch admits a receipt into a provenance
+ ;; chain. Anything else is unmeasured, never partially used.
+ :receipt-admission
+ {:rule :fetch-status-ok-required
+  :admit-when #{:ok}
+  :else {:missingness-flag :fetch-status-non-ok
+         :backs-observation? false}}
 
  ;; ── Typed entity/event inputs ──────────────────────────────────────
  ;; Entity separation is a hard invariant: the limited partner as a
@@ -66,8 +86,16 @@
  :entity-record
  {:schema [:entity-id :entity-type :name :legal-name :jurisdiction
            :identifier-class :identifier-value :source-receipt-id
-           :asserted-at :observed-at]
+           :provenance-chain :asserted-at :observed-at]
   :invariant :one-entity-type-per-entity-id
+  ;; v2: identifier invariants. A missing identifier is :identifier-
+  ;; unstated, never guessed from a brand string.
+  :identifier-invariant #{:identifier-value-unique-across-entity-types
+                          :one-identifier-per-entity-id}
+  :identifier-missing-flag :identifier-unstated
+  ;; v2: every entity record carries a provenance chain citing its own
+  ;; receipt.
+  :invariant-rule :provenance-chain-required-on-every-entity-record
   :note "A brand string never auto-creates a legal entity."}
  :event-record
  {:schema [:event-id :event-type :lp-entity-id :fund-entity-id
@@ -77,20 +105,36 @@
                            :stated-redemption]
                     :currency :string
                     :as-stated-by-source? true}
-           :source-receipt-id]
+           :source-receipt-id
+           :provenance-chain]
   ;; lp-commitment-is-not-current-nav-or-ownership: a commitment amount
   ;; is a stated capital pledge, never a NAV, valuation or ownership
   ;; stake. Kinds are carried, not collapsed. LP and fund must be
-  ;; distinct entity ids.
+  ;; distinct entity ids. v2: every event carries a provenance chain
+  ;; that cites its own receipt.
   :invariants #{:commitment-kind-is-carried-not-collapsed
-                :lp-and-fund-are-distinct-entity-ids}}
+                :lp-and-fund-are-distinct-entity-ids
+                :provenance-chain-required-on-every-event}}
+
+ ;; ── Receipt disagreement (v2) ──────────────────────────────────────
+ ;; Two allow-class receipts stating different facts about the same
+ ;; commitment produce a flagged observation carrying ALL conflicting
+ ;; receipt ids in its chain and value :unmeasured. This contract never
+ ;; picks a winner and never averages or "reconciles" stated amounts.
+ :receipt-disagreement
+ {:rule :record-never-resolve
+  :result {:value :unmeasured}
+  :carry [:all-conflicting-receipt-ids]
+  :missingness-flag :receipt-disagreement}
 
  ;; ── Missingness / coverage flags ───────────────────────────────────
  :missingness
  {:flags #{:no-receipt :receipt-unparseable :amount-not-stated
            :currency-unstated :jurisdiction-unstated
            :lp-entity-unresolvable :fund-entity-unresolvable
-           :source-language-unmapped}
+           :source-language-unmapped :identifier-unstated
+           :fetch-status-non-ok :receipt-disagreement
+           :provenance-chain-incomplete}
   :rule :missing-is-unmeasured
   :coverage-unit [:jurisdiction :source :language :year :stage
                   :identifier-class]
@@ -111,6 +155,7 @@
            :asserted-at]
   :observation-kinds #{:lp-commitment-in-window :commitment-amendment-in-window
                        :stated-redemption-in-window :stated-amount-in-window}
+  :provenance-rule :receipt-only-and-non-discovery-and-fetch-ok
   :forbidden-fields #{:rank :score :centrality :nav :ownership-stake
                       :suitability :recommendation :current-valuation
                       :personal-wealth}}
@@ -146,7 +191,7 @@
  :query-readback
  {:request-schema [:query-id :observation-kind :window
                    :filter {:keys #{:jurisdiction :lp-entity-type
-                                    :amount-kind}}]
+                                    :amount-kind :source-class}}]
   :response-schema [:query-id :status
                     :observations [:observation-id]
                     :coverage-record-ref
