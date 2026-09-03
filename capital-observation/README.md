@@ -149,6 +149,19 @@ proposed to Hyakka as auditable questions.
   `:carry-both-never-resolve` — no winner is picked, the pair is flagged
   `:first-party-source-conflict` wherever it appears downstream, and a
   conflict never resolves into an ownership or current-holding claim.
+- **v2 — hardening**: (1) fetch-status **admission gate** — only `:ok`
+  receipts are admitted to back a derived observation; every other
+  fetch status is recorded verbatim but produces a refusal record
+  (`:admission-refused-receipt-backs-no-observation`), and a re-fetch
+  appends a new receipt + history entry rather than retro-invalidating
+  derived observations. (2) required **event-level provenance chains** —
+  every event carries an ordered, receipt-exact `:provenance-chain`
+  (non-empty, all ids exist, head = `:source-receipt-id`), and the
+  derived observation carries its event's chain exactly. (3) **strict
+  readback** — unknown filter keys answer `:rejected-filter` instead of
+  being silently ignored, and a `:listing-kind` filter matches the
+  carried kind exactly (a removal is never returned under a listed
+  filter).
 
 Verify deterministically (offline, no network):
 
