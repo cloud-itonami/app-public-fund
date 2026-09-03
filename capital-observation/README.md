@@ -114,6 +114,19 @@ entities with provenance, proposed to Hyakka as auditable questions.
   and are never collapsed. An estimated valuation is carried with kind
   `:estimated-valuation` only — a verified/current valuation field cannot
   exist in the derived-observation shape by construction.
+- **v2 hardening** (`exit-observation.v2`, 2026-09-03): receipts carry an
+  explicit fetch status (`:ok :error :redirected :not-modified
+  :robots-disallowed :auth-required`) and only `:ok` receipts are
+  admitted to back a derived observation — a refused admission produces a
+  refusal record, never silence, and never a retro-invalidation of
+  already-derived observations (a re-fetch appends). Every event carries
+  a required `:provenance-chain` (all ids exist, head = its
+  `:source-receipt-id`) and a derived observation carries its event's
+  chain exactly — invented or trimmed receipts are refused. Readback is
+  strict: an unknown filter key answers `:rejected-filter` instead of
+  being ignored, and a `:consideration-kind` filter matches the carried
+  kind exactly, so an announced consideration is never returned under a
+  completed filter.
 - Same guarantees as above: hash-backed receipts, entity separation,
   time-bounded windows, missingness flags, append-only refresh history
   (reclassification appends, never overwrites), no rank/score/returns/
