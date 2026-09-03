@@ -17,13 +17,16 @@
 ;; returns, and produces no investment advice. Every derived
 ;; observation traces back to a source receipt by hash.
 ;;
-;; Method version: v1 (2026-09-01). Any change to field semantics bumps
+;; Method version: v2 (2026-09-03). Any change to field semantics bumps
 ;; :method/version and appends a :refresh/history entry; old
-;; observations are never silently reinterpreted.
+;; observations are never silently reinterpreted. v2 hardens
+;; fetch-status admission, event-level provenance chains, and the
+;; conflict record (all competing receipts carried, unmeasured result,
+;; no winner-picking mechanism).
 
 {:contract/id :fund-manager-affiliation-observation
- :contract/version "1.0.0"
- :method/version "fund-manager-affiliation-observation.v1"
+ :contract/version "2.0.0"
+ :method/version "fund-manager-affiliation-observation.v2"
  :actor :cloud-itonami/app-public-fund
  :proposes-to :network-awai/app-hyakka
 
@@ -56,6 +59,27 @@
   :fetch {:respect-robots? true :respect-auth-waf-captcha? true
           :user-agent "app-public-fund-manager-affiliation-observation/1.0"}}
 
+ ;; ── v2: receipt admission ──────────────────────────────────────────
+ ;; A receipt whose fetch did not fully succeed backs no observation.
+ ;; It is still recorded (missing-is-unmeasured, never guessed), but it
+ ;; is flagged and excluded from the derived-observation basis.
+ :receipt-admission
+ {:rule :fetch-status-ok-required
+  :admissible-status #{:ok}
+  :else {:missingness-flag :fetch-status-non-ok
+         :backs-observation? false}}
+
+ ;; ── v2: event-level provenance ─────────────────────────────────────
+ ;; Every manager-naming / GP-naming event must cite a provenance chain
+ ;; of receipt ids that all exist in this contract's receipt set. An
+ ;; event with no traceable chain is unmeasured
+ ;; (:provenance-chain-incomplete), never inferred — a naming claim that
+ ;; cannot be traced back is not carried forward as a naming.
+ :event-provenance
+ {:required? true
+  :rule :every-event-cites-existing-receipts
+  :incomplete-flag :provenance-chain-incomplete}
+
  ;; ── Typed entity/event inputs ──────────────────────────────────────
  ;; Entity separation is a hard invariant: fund vehicle, management
  ;; company and general partner are distinct entities even when they
@@ -75,6 +99,7 @@
            :affiliated-entity-id
            :role {:kind [:one-of :manager :general-partner :unstated]
                   :as-stated-by-source? true}
+           :provenance-chain
            :observed-at :asserted-at :source-receipt-id]
   :invariants #{:manager-naming-is-not-ownership-or-control
                 :roles-carried-not-collapsed
@@ -85,7 +110,8 @@
  {:flags #{:no-receipt :receipt-unparseable :role-unstated
            :fund-vehicle-unstated :affiliated-entity-unstated
            :jurisdiction-unstated :identifier-unstated
-           :source-language-unmapped :first-party-source-conflict}
+           :source-language-unmapped :first-party-source-conflict
+           :fetch-status-non-ok :provenance-chain-incomplete}
   :rule :missing-is-unmeasured
   :coverage-unit [:jurisdiction :source :language :year
                   :identifier-class]
@@ -111,9 +137,17 @@
   :conflict-kinds #{:named-vs-absent :management-company-disagreement
                     :role-disagreement}
   :resolution :carry-both-never-resolve
+  ;; v2 hardening: the conflict record itself carries ALL competing
+  ;; receipt ids as its provenance, and its derived value is
+  ;; :unmeasured — the contract declares no winner-picking mechanism
+  ;; and a disagreement never hardens into a naming.
+  :provenance :all-competing-receipt-ids
+  :derived-value :unmeasured
+  :no-winner-mechanism true
   :invariants #{:conflict-is-observation-not-adjudication
                 :each-side-backs-to-its-own-receipt
-                :conflict-never-resolves-into-ownership-or-control}}
+                :conflict-never-resolves-into-ownership-or-control
+                :disagreement-never-hardens-into-a-naming}}
 
  ;; ── Derived observation ────────────────────────────────────────────
  ;; The only derived artifact is an observation of manager/GP naming

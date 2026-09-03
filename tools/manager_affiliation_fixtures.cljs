@@ -1,7 +1,12 @@
 ;; manager_affiliation_fixtures.cljs — deterministic offline fixture
-;; runner for the fund-manager-affiliation-observation.v1 contract.
+;; runner for the fund-manager-affiliation-observation contract.
 ;; No network. Exit 0 = clean, 1 = violation found, 2 = contract
 ;; unreadable.
+;;
+;; v2 (2026-09-03): adds fetch-status admission, event-level provenance
+;; chains, and hardened conflict-record fixtures. CONTRACT_PATH env
+;; override exists for the negative check (run against the v1 contract,
+;; it must report failures and exit 1).
 ;;
 ;; Run: nbb tools/manager_affiliation_fixtures.cljs
 
@@ -24,7 +29,8 @@
   ok?)
 
 ;; ── Load the contract ───────────────────────────────────────────────
-(def contract-path "capital-observation/fund-manager-affiliation-observation.edn")
+(def contract-path (or (aget js/process.env "CONTRACT_PATH")
+                       "capital-observation/fund-manager-affiliation-observation.edn"))
 (def contract
   (try
     (edn/read-string (.readFileSync fs contract-path "utf8"))
@@ -47,7 +53,13 @@
     :source-class :official-company-registry :source-language "en"
     :observed-at "2026-02-02T00:00:00Z"
     :content-hash (sha256-hex "registry record bytes v1")
-    :fetch-status 200}])
+    :fetch-status 200}
+   ;; v2: a non-ok fetch is recorded but must back no observation.
+   {:receipt-id "rcpt-3" :source-url "https://fund.example/fund-1-mirror"
+    :source-class :fund-first-party :source-language "en"
+    :observed-at "2026-02-03T00:00:00Z"
+    :content-hash (sha256-hex "mirror page bytes")
+    :fetch-status 404}])
 
 (def fixture-entities
   [{:entity-id "fund-1" :entity-type :fund-vehicle
@@ -77,16 +89,26 @@
     :fund-vehicle-entity-id "fund-1" :affiliated-entity-id "mgmt-1"
     :role {:kind :manager :as-stated-by-source? true}
     :observed-at "2026-02-01T00:00:00Z" :asserted-at "2026-01-20"
+    :provenance-chain ["rcpt-1"]
     :source-receipt-id "rcpt-1"}
    {:event-id "evt-2" :event-type :general-partner-named
     :fund-vehicle-entity-id "fund-1" :affiliated-entity-id "gp-1"
     :role {:kind :general-partner :as-stated-by-source? true}
     :observed-at "2026-02-02T00:00:00Z" :asserted-at "2026-01-20"
-    :source-receipt-id "rcpt-2"}])
+    :provenance-chain ["rcpt-2"]
+    :source-receipt-id "rcpt-2"}
+   ;; v2: an event whose ONLY receipt is non-ok — recorded, but must
+   ;; surface :fetch-status-non-ok and back no observation.
+   {:event-id "evt-3" :event-type :manager-named
+    :fund-vehicle-entity-id "fund-1" :affiliated-entity-id "mgmt-2"
+    :role {:kind :manager :as-stated-by-source? true}
+    :observed-at "2026-02-03T00:00:00Z" :asserted-at "2026-01-20"
+    :provenance-chain ["rcpt-3"]
+    :source-receipt-id "rcpt-3"}])
 
 (def fixture-derived
   [{:observation-id "obs-1"
-    :method/version "fund-manager-affiliation-observation.v1"
+    :method/version "fund-manager-affiliation-observation.v2"
     :window fixture-window
     :observation-kind :manager-named-in-window
     :fund-vehicle-entity-id "fund-1" :affiliated-entity-id "mgmt-1"
@@ -95,7 +117,7 @@
     :missingness-flags #{} :provenance-chain ["rcpt-1"]
     :asserted-at "2026-01-20"}
    {:observation-id "obs-2"
-    :method/version "fund-manager-affiliation-observation.v1"
+    :method/version "fund-manager-affiliation-observation.v2"
     :window fixture-window
     :observation-kind :general-partner-named-in-window
     :fund-vehicle-entity-id "fund-1" :affiliated-entity-id "gp-1"
@@ -264,10 +286,75 @@
 (defn fixture-method-version [ctx]
   (chk ctx "method version pinned"
        (str/starts-with? (:method/version contract)
-                         "fund-manager-affiliation-observation.v1"))
+                         "fund-manager-affiliation-observation.v2"))
   (doseq [o fixture-derived]
     (chk ctx (str (:observation-id o) " pins the method version")
          (= (:method/version contract) (:method/version o)))))
+
+;; 14. v2 fetch-status admission: the contract must declare the rule,
+;;     a non-ok receipt must back no observation, and the event citing
+;;     ONLY the non-ok receipt (evt-3) is deterministically excluded
+;;     from any derived basis. Negative check: a v1-shaped contract
+;;     (no admission rule) fails here.
+(defn fixture-fetch-status-admission [ctx]
+  (let [adm (get contract :receipt-admission)
+        by-id (into {} (map (juxt :receipt-id identity) fixture-receipts))]
+    (chk ctx "contract declares :fetch-status-ok-required"
+         (= :fetch-status-ok-required (:rule adm)))
+    (chk ctx "non-ok receipt must not back an observation"
+         (false? (get-in adm [:else :backs-observation?])))
+    (chk ctx "admission else-branch flags :fetch-status-non-ok"
+         (= :fetch-status-non-ok (get-in adm [:else :missingness-flag])))
+    (chk ctx "missingness flags carry :fetch-status-non-ok"
+         (contains? (get-in contract [:missingness :flags])
+                    :fetch-status-non-ok))
+    ;; data-level: rcpt-3 is non-ok, evt-3 cites only rcpt-3
+    (chk ctx "fixture receipt rcpt-3 is non-ok" (= 404 (:fetch-status (get by-id "rcpt-3"))))
+    (chk ctx "404 is not an admissible status"
+         (not (contains? (set (:admissible-status adm)) 404)))
+    (chk ctx "evt-3 cites only the non-ok receipt"
+         (= ["rcpt-3"] (:provenance-chain (first (filter #(= "evt-3" (:event-id %)) fixture-events)))))))
+
+;; 15. v2 event-level provenance: the event schema carries
+;;     :provenance-chain, the rule is required, every fixture event's
+;;     chain resolves to existing receipts, and a broken chain is
+;;     detectable as :provenance-chain-incomplete.
+(defn fixture-event-provenance [ctx]
+  (let [evprov (get contract :event-provenance)
+        schema (set (get-in contract [:event-record :schema]))
+        receipt-ids (set (map :receipt-id fixture-receipts))]
+    (chk ctx "event provenance is required" (true? (:required? evprov)))
+    (chk ctx "event provenance rule present"
+         (= :every-event-cites-existing-receipts (:rule evprov)))
+    (chk ctx "incomplete flag is :provenance-chain-incomplete"
+         (= :provenance-chain-incomplete (:incomplete-flag evprov)))
+    (chk ctx "event schema carries :provenance-chain" (contains? schema :provenance-chain))
+    (chk ctx "missingness flags carry :provenance-chain-incomplete"
+         (contains? (get-in contract [:missingness :flags])
+                    :provenance-chain-incomplete))
+    (doseq [ev fixture-events]
+      (chk ctx (str (:event-id ev) " has a provenance chain") (seq (:provenance-chain ev)))
+      (doseq [rid (:provenance-chain ev)]
+        (chk ctx (str (:event-id ev) " chain cites existing receipt " rid)
+             (contains? receipt-ids rid))))
+    ;; data-level: a chain citing a non-existent receipt is detectable
+    (chk ctx "broken chain is detectable in fixture"
+         (some #(not (contains? receipt-ids %)) ["rcpt-1" "r-missing"]))))
+
+;; 16. v2 hardened conflict record: the conflict carries ALL competing
+;;     receipt ids as provenance, its derived value is :unmeasured,
+;;     the contract declares no winner-picking mechanism, and a
+;;     disagreement can never harden into a naming.
+(defn fixture-conflict-hardened [ctx]
+  (let [c (get contract :conflict-observation)]
+    (chk ctx "conflict provenance is all-competing-receipt-ids"
+         (= :all-competing-receipt-ids (:provenance c)))
+    (chk ctx "conflict derived value is :unmeasured" (= :unmeasured (:derived-value c)))
+    (chk ctx "no winner-picking mechanism declared" (true? (:no-winner-mechanism c)))
+    (chk ctx "invariant disagreement-never-hardens-into-a-naming"
+         (contains? (:invariants c) :disagreement-never-hardens-into-a-naming))
+    (chk ctx "fixture conflict carries both receipts"
+         (= 2 (count (:competing-source-receipt-ids fixture-conflict))))))
 
 (def fixtures
   {"window-bounds" fixture-window
@@ -282,7 +369,10 @@
    "refresh-history" fixture-refresh-history
    "readback" fixture-readback
    "hyakka-proposal" fixture-hyakka-proposal
-   "method-version" fixture-method-version})
+   "method-version" fixture-method-version
+   "fetch-status-admission" fixture-fetch-status-admission
+   "event-provenance" fixture-event-provenance
+   "conflict-hardened" fixture-conflict-hardened})
 
 ;; ── Run ─────────────────────────────────────────────────────────────
 (defn run-all []
@@ -296,7 +386,7 @@
         (swap! failures conj {:fixture name :msg (str "fixture threw: " (.-message e))})
         (println (str "  threw " name)))))
   (if (empty? @failures)
-    (do (println "PASS: all manager-affiliation fixtures found nothing wrong")
+    (do (println (str "PASS: all " (count fixtures) " manager-affiliation fixtures found nothing wrong"))
         (js/process.exit 0))
     (do (doseq [{:keys [fixture msg]} @failures]
           (println (str "FAIL [" fixture "] " msg)))
