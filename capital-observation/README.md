@@ -285,3 +285,41 @@ Verify deterministically (offline, no network):
 ```bash
 nbb tools/round_participant_fixtures.cljs
 ```
+
+## Co-investment adjacency observation contract (`co-investment-observation.edn`)
+
+`co-investment-observation.edn` (`co-investment-observation.v1`) is a
+bounded actor contract for observing **co-investment listings** —
+"source S listed participant entities X and Y together in the same
+financing round R at time T" — as registry- or first-party-backed,
+hash-backed claims, proposed to Hyakka as auditable questions.
+
+- `edge` is **adjacency only**: it means exactly "the source listed A
+  and B together in round R". It is symmetric and unordered, and the
+  contract structurally excludes interpreting it as syndication,
+  alignment, endorsement, influence, a relationship, or a follow-on.
+  A named role (e.g. "lead") is only ever carried as the source's own
+  word (`:listing-kind`), never verified.
+- This is a **network observation, not a network score**: no
+  centrality, degree counts, influence, network strength, ranking or
+  syndication patterns — those fields are forbidden by construction,
+  as are all rank/score/valuation/returns/ownership/suitability
+  fields. A round with a single listed participant produces no edge
+  and flags `:single-participant-only`.
+- Two allowed sources listing different participant sets for the same
+  round yield **two separate edge observations**, each bound to its own
+  receipt — never a merged participant list.
+- Same guarantees as the other contracts: sha256-backed verbatim
+  receipts, `fetch-status :ok` admission, hard entity separation (a
+  company, a fund vehicle and a limited partner sharing a brand stay
+  distinct), participant ids must resolve to declared entities,
+  half-open time-bounded windows (`missing-is-unmeasured`,
+  `:out-of-window` outside the window), append-only refresh history,
+  questions-only Hyakka proposal, and a deterministic readback that
+  always carries coverage + missingness + provenance.
+
+Verify deterministically (offline, no network):
+
+```bash
+nbb tools/co_investment_fixtures.cljs
+```
