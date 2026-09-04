@@ -12,11 +12,16 @@
 ;; how much of a window is measured and what is unmeasured. It never says
 ;; how much money moved, who owns what, or how good anything is. Every
 ;; rollup row is traceable to the observation kinds that produced it.
-;; Method version: coverage-rollup-observation.v1 (2026-09-01).
-
+;; Method version: coverage-rollup-observation.v2 (2026-09-03). The v2
+;; hardening ports the fetch-status admission and provenance-chain
+;; completeness guarantees already landed on fund-close / round-participant
+;; to the compositional layer: a coverage record whose backing receipts
+;; include a fetch that was not fully :ok backs no rollup count, and a
+;; coverage record with an unresolvable receipt chain is unmeasured —
+;; both are flagged rows in the rollup, never silently dropped inputs.
 {:contract/id :coverage-rollup-observation
- :contract/version "1.0.0"
- :method/version "coverage-rollup-observation.v1"
+ :contract/version "2.0.0"
+ :method/version "coverage-rollup-observation.v2"
  :actor :cloud-itonami/app-public-fund
  :proposes-to :network-awai/app-hyakka
  :composes-with [:fund-close-observation        ; any contract exposing
@@ -42,12 +47,28 @@
  {:schema [:coverage-record-ref :observation-kind :method/version
            :window :coverage-unit :unit-key
            :observed-count :unmeasured-count
+           :backing-receipt-fetch-status
            :source-receipt-hashes]
   :rule :unresolvable-provenance-chain-refuses-input
   ;; method/version separation: inputs from different method versions are
   ;; never mixed in one rollup. Cross-version rollups are separate
   ;; rollups, compared by unit-key, never implicitly merged.
-  :version-separation :one-method-version-per-rollup}
+  :version-separation :one-method-version-per-rollup
+  ;; v2: fetch-status admission. A coverage record whose backing receipts
+  ;; include a fetch that was not fully :ok (non-2xx, network error,
+  ;; partial body) backs NO rollup count: its observed-count contributes
+  ;; zero, its unmeasured-count is retained, and the row carries the
+  ;; :fetch-status-non-ok flag with the excluded record cited in
+  ;; :excluded-inputs — never silently dropped from the rollup.
+  :fetch-admission {:backing-receipt-fetch-status [:one-of :ok :non-ok]
+                    :rule :non-ok-fetch-backs-no-rollup-count
+                    :flag :fetch-status-non-ok}
+  ;; v2: provenance-chain completeness. A coverage record whose receipt
+  ;; chain does not resolve to receipt hashes is unmeasured for rollup
+  ;; purposes (:provenance-chain-incomplete); its counts are not summed
+  ;; into any rollup total.
+  :provenance-chain-completeness {:rule :unresolvable-chain-is-unmeasured-not-zero
+                                  :flag :provenance-chain-incomplete}}
 
  ;; ── Derived rollup row ─────────────────────────────────────────────
  :derived-rollup
@@ -55,7 +76,7 @@
            :rollup-kind :coverage-unit :unit-key
            :per-kind {:observed-count :unmeasured-count}
            :total-observed-count :total-unmeasured-count
-           :missingness-flags :provenance-chain
+           :missingness-flags :provenance-chain :excluded-inputs
            :asserted-at]
   :rollup-kinds #{:coverage-in-window}
   :invariant :counts-are-sums-of-input-counts-not-recomputed
@@ -63,11 +84,20 @@
   ;; An unmeasured unit (0 observed, N unmeasured) is a row, not silence.
   ;; Missingness flags propagate: a row containing any input flagged
   ;; :no-receipt or :receipt-unparseable carries those flags forward.
+  ;; v2 adds the two admission flags: a row that excluded a non-ok-fetch
+  ;; input or an unresolvable-chain input carries those flags forward.
   :flag-propagation #{:no-receipt :receipt-unparseable :amount-not-stated
                       :close-kind-unstated :jurisdiction-unstated
                       :source-language-unmapped
                       :commitment-amount-not-stated
-                      :round-kind-unstated}
+                      :round-kind-unstated
+                      :fetch-status-non-ok
+                      :provenance-chain-incomplete}
+  ;; v2: :excluded-inputs cites every input coverage record that was
+  ;; admitted to no rollup count (non-ok fetch or unresolvable chain).
+  ;; Exclusion is visible, never a silent drop: each excluded ref appears
+  ;; here together with the flag that caused the exclusion.
+  :excluded-inputs-rule :excluded-input-is-cited-with-its-flag-not-dropped
   ;; Structurally excluded fields — a coverage rollup must not become a
   ;; leaderboard, a total-raise figure or a completeness score.
   :forbidden-fields #{:rank :score :centrality :nav :ownership-stake

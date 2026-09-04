@@ -172,7 +172,7 @@ nbb tools/portfolio_listing_fixtures.cljs
 ## Coverage rollup contract
 
 `coverage-rollup-observation.edn`
-(`coverage-rollup-observation.v1`) is a compositional contract that
+(`coverage-rollup-observation.v2`) is a compositional contract that
 aggregates the per-window coverage records the observation kinds already
 emit, per coverage-unit × observation-kind. It is measurement of
 measurement: how much of a window is measured and what is unmeasured.
@@ -182,6 +182,13 @@ score — unmeasured units are emitted as rows, never silence, and
 forbidden. Same window shape, append-only refresh history, and readback
 discipline (one method/version per page, every response carries
 coverage + missingness, `:unmeasured` is not zero).
+
+v2 hardening: fetch-status admission and provenance-chain completeness.
+A coverage record whose backing receipts include a non-`:ok` fetch backs
+no rollup count, and a record whose receipt chain does not resolve is
+unmeasured; both are cited in `:excluded-inputs` with their flag
+(`:fetch-status-non-ok` / `:provenance-chain-incomplete`) — exclusion is
+visible, never a silent drop.
 
 ```bash
 nbb tools/coverage_rollup_fixtures.cljs
