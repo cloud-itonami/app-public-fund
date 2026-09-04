@@ -1,0 +1,181 @@
+;; regulator-registration-observation.edn — bounded actor contract for
+;; observing PUBLIC regulatory registration/filing records of fund
+;; managers (e.g. investment-adviser registrations, registry filing
+;; records), proposed to Hyakka (network-awai/app-hyakka) as auditable
+;; questions, not as a score.
+;;
+;; Scope guard: this contract observes REGISTRATION/FILING RECORDS as
+;; source-backed claims only. It does NOT rank managers, funds, GPs or
+;; LPs, does not infer assets under management, performance, personal
+;; wealth or competence, and produces no investment advice. A
+;; registration record is not an endorsement or a fitness claim; a
+;; filing's stated figures are carried as-stated only. Every derived
+;; observation traces back to a source receipt by hash.
+;;
+;; Epistemic boundaries honored here (capital-scope.edn):
+;;   :brand-is-not-legal-entity          — a manager brand never
+;;     auto-creates the registered legal entity.
+;;   :venture-firm-is-not-fund-vehicle   — the registered adviser entity
+;;     and any fund vehicle it manages remain distinct entities.
+;;   :gp-is-not-management-company-without-source
+;;   :missing-is-unmeasured              — no receipt in a window means
+;;     "not measured", never "no filing exists".
+;;
+;; Method version: v1 (2026-09-04). Any change to field semantics bumps
+;; :method/version and appends a :refresh/history entry; old observations
+;; are never silently reinterpreted.
+
+{:contract/id :regulator-registration-observation
+ :contract/version "1.0.0"
+ :method/version "regulator-registration-observation.v1"
+ :actor :cloud-itonami/app-public-fund
+ :proposes-to :network-awai/app-hyakka
+
+ ;; ── Measurement window ─────────────────────────────────────────────
+ ;; Half-open [from, until) in UTC ISO-8601 dates. "missing" inside a
+ ;; window means "not measured in this window", never "nothing happened".
+ :window
+ {:schema [:from :until :declared-at :timezone]
+  :format "YYYY-MM-DD"
+  :closed? false                       ; [from, until)
+  :rule :window-must-not-overlap-within-same-source-and-method}
+
+ ;; ── Source receipts ────────────────────────────────────────────────
+ ;; Every observation cites exactly one receipt, captured verbatim
+ ;; (bytes hash + fetch metadata) before any parsing. Only official
+ ;; regulator / registry sources may back a derived observation here —
+ ;; a news report of "X registered with Y" is discovery-only and can
+ ;; never back the record.
+ :source-receipt
+ {:schema [:receipt-id :source-url :source-class :source-language
+           :observed-at :content-hash :fetch-status]
+  :content-hash {:algo "sha256" :of "response-body-bytes"}
+  :source-class-allow #{:official-regulator :official-company-registry
+                        :official-securities-filing :official-board-record}
+  :source-class-forbid #{:search-snippet :generated-summary :scraped-directory
+                         :social-post :broker-list :paywall-bypass
+                         :captcha-bypass :news-report
+                         :licensed-commercial-aggregator}
+  ;; Stricter than the system-wide allow set on purpose: for
+  ;; registrations, first-party pages (manager's own site) are NOT
+  ;; evidence that a registration exists — only the regulator is.
+  :source-class-discovery-only #{:manager-first-party :fund-first-party
+                                 :news-report :licensed-commercial-aggregator}
+  :fetch {:respect-robots? true :respect-auth-waf-captcha? true
+          :user-agent "app-public-fund-regulator-registration-observation/1.0"}}
+
+ ;; ── Typed entity/event inputs ──────────────────────────────────────
+ ;; Entity separation is a hard invariant: the registered management
+;; company / adviser entity, its general partner, and any fund vehicle
+ ;; it manages are distinct entities even when they share a brand name
+ ;; (brand-is-not-legal-entity, venture-firm-is-not-fund-vehicle).
+ :entity-types #{:management-company :general-partner :fund-vehicle
+                 :regulator :jurisdiction}
+ :event-types #{:registration-filed :registration-effective
+                :registration-amended :registration-withdrawn
+                :registration-rejected}
+ :entity-record
+ {:schema [:entity-id :entity-type :name :legal-name :jurisdiction
+           :identifier-class :identifier-value :source-receipt-id
+           :asserted-at :observed-at]
+  ;; identifier-class is restricted to official registry identifiers:
+  ;; CRD / IARD numbers, company registration numbers, official
+  ;; registry ids. LEI may appear only as stated by the regulator.
+  :identifier-class-allow #{:crd :iard :company-registration-number
+                            :official-registry-id :lei}
+  :invariant :one-entity-type-per-entity-id
+  :note "A brand string never auto-creates a legal entity."}
+ :event-record
+ {:schema [:event-id :event-type :entity-id :regulator-entity-id
+           :announced-at :effective-at :asserted-at
+           :as-stated {:kind [:one-of :stated :unstated]
+                       :fields #{:aum-as-stated :client-count-as-stated}
+                       :as-stated-by-source? true}
+           :source-receipt-id]
+  ;; A filing's stated figures are carried AS STATED only, namespaced
+  ;; under :as-stated, and never promoted into a verified/performance
+  ;; field. No AUM field exists outside :as-stated by construction.
+  :invariants #{:stated-figures-are-carried-not-promoted
+                :registration-is-not-endorsement-or-fitness
+                :announced-effective-is-not-effective
+                :withdrawal-is-not-rejection}}
+
+ ;; ── Missingness / coverage flags ───────────────────────────────────
+ :missingness
+ {:flags #{:no-receipt :receipt-unparseable :regulator-unstated
+           :effective-date-unstated :identifier-unstated
+           :jurisdiction-unstated :source-language-unmapped}
+  :rule :missing-is-unmeasured
+  :coverage-unit [:jurisdiction :source :language :year :industry :stage
+                  :identifier-class]
+  :coverage-record
+  {:schema [:coverage-unit :unit-key :observed-count :unmeasured-count
+            :window :method/version]}}
+
+ ;; ── Derived observation ────────────────────────────────────────────
+ ;; The only derived artifact is an observation of registration events
+ ;; within a window. No ranking, scoring, AUM verification, performance,
+ ;; suitability or personal field exists in this shape by construction.
+ :derived-observation
+ {:schema [:observation-id :method/version :window
+           :observation-kind :entity-id :event-id
+           :value {:kind [:one-of :registration-event-count
+                    :registration-status-observation
+                    :identifier-observation]
+                   :basis #{:receipt-only}}
+           :missingness-flags :provenance-chain
+           :asserted-at]
+  :observation-kinds #{:registration-filed-in-window
+                       :registration-effective-in-window
+                       :registration-amended-in-window
+                       :registration-withdrawn-in-window
+                       :registration-rejected-in-window
+                       :registration-status-in-window}
+  :forbidden-fields #{:rank :score :centrality :returns :irr :moic
+                      :ownership-stake :suitability :recommendation
+                      :verified-aum :personal-wealth :client-list
+                      :performance-history}
+  }
+
+ ;; ── Refresh history ────────────────────────────────────────────────
+ ;; Append-only. A re-observation of the same entity/window with a newer
+ ;; method version appends; it never edits prior entries.
+ :refresh-history
+ {:schema [:history-id :observation-id :re-observed-at
+           :reason {:kind [:one-of :window-advanced :source-updated
+                     :event-reclassified :method-version-bumped]}
+           :changed-fields]
+  :append-only? true
+  ;; A filing later observed as effective (or withdrawn) is a NEW
+  ;; observation plus a history entry — the filed record is never
+  ;; overwritten.
+  :rule :reclassification-appends-does-not-overwrite}
+
+ ;; ── Hyakka proposal ────────────────────────────────────────────────
+ ;; Auditable QUESTIONS over the observation records, e.g. "how many
+ ;; registration-effective events were observed with receipts from
+ ;; regulator R in jurisdiction J within window W?" — each question
+ ;; carries its own coverage and missingness statement.
+ :hyakka-proposal
+ {:schema [:proposal-id :question-text :over-observation-kind
+           :window :coverage-record-ref :missingness-flags
+           :disclaimer]
+  :disclaimer
+  "Observations only. Registration records are not endorsements,
+   performance, competence or investment suitability. No investment
+   advice."}
+
+ ;; ── Query / readback shape ─────────────────────────────────────────
+ ;; Deterministic readback: a question id + window returns observations
+ ;; plus the exact coverage statement that bounds them, or an explicit
+ ;; :unmeasured response. Unknown keys are rejected, not ignored.
+ :query-readback
+ {:request-schema [:query-id :observation-kind :window
+                   :filter {:keys #{:jurisdiction :entity-type
+                                    :event-type :regulator}}]
+  :response-schema [:query-id :status
+                    :observations [:observation-id]
+                    :coverage-record-ref
+                    :missingness-flags]
+  :status-values #{:ok :unmeasured :out-of-window}
+  :rule :readback-must-carry-coverage-and-missingness}}
