@@ -395,3 +395,35 @@ Verify deterministically (offline, no network):
 nbb tools/co_investment_fixtures.cljs
 nbb tools/source_receipt_refresh_fixtures.cljs
 ```
+
+## Regulator registration observation contract (`regulator-registration-observation.edn`)
+
+`regulator-registration-observation.edn` is a bounded actor contract for
+observing **public regulatory registration / filing records** of fund
+managers (investment-adviser registrations, registry filing records),
+proposed to Hyakka as auditable questions.
+
+- Only official regulator / registry / securities-filing sources may
+  back a derived observation — for registrations, a manager's own page
+  is NOT evidence a registration exists (first-party classes are
+  discovery-only here, stricter than the system-wide allow set).
+- `registration-is-not-endorsement-or-fitness`; a filing's stated
+  figures (AUM, client counts) are carried only under `:as-stated` and
+  never promoted; `:verified-aum` is structurally forbidden.
+- `announced-effective-is-not-effective`; `withdrawal-is-not-rejection`
+  — event kinds survive distinct and never collapse.
+- **v2 hardening** (2026-09-05): (1) fetch-status **admission gate** —
+  only `:ok` receipts are admitted; a refused admission produces a
+  refusal record, never silence, and never retro-invalidates earlier
+  observations (a re-fetch appends). (2) required **event-level
+  provenance chains** — non-empty, all ids exist, head =
+  `:source-receipt-id`; the derived observation carries its event's
+  chain exactly. (3) **strict readback** — unknown filter keys answer
+  `:rejected-filter`, and an `:event-type` filter matches the carried
+  kind exactly (a withdrawal is never returned under a filed filter).
+
+Verify deterministically (offline, no network):
+
+```bash
+nbb tools/regulator_registration_fixtures.cljs
+```

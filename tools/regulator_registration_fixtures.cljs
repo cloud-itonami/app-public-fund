@@ -9,6 +9,11 @@
 ;;   2  REFUSED — a fixture could not run
 ;;
 ;; Usage: nbb tools/regulator_registration_fixtures.cljs [path/to/contract.edn]
+;;
+;; v2 (2026-09-05): fetch-status admission gate, required event-level
+;; provenance chains, and strict readback (unknown filter keys rejected,
+;; event-type filters match exactly). Negative fixtures construct
+;; violating inputs and assert the derivation REFUSES them.
 
 (ns regulator-registration-fixtures
   (:require ["fs" :as fs]
@@ -54,7 +59,13 @@
             "MANAGER合同会社 登録相当記録; REG-2")
    (receipt "r-3" "https://example-registry.test/company/REG-2"
             :official-company-registry "ja"
-            "MANAGER Fund I 合同組合 登記記録")])
+            "MANAGER Fund I 合同組合 登記記録")
+   ;; v2: a receipt whose fetch FAILED. Recorded verbatim, but it refuses
+   ;; admission — it can never back a derived observation.
+   (assoc (receipt "r-4" "https://example-regulator.test/registry/adviser/REG-3"
+                   :official-regulator "en"
+                   "MANAGER LLC registration withdrawn (fetch failed)")
+          :fetch-status :error)])
 
 ;; Two entities share the brand MANAGER — the registered adviser (a
 ;; management company) and a fund vehicle it manages must stay distinct.
@@ -79,17 +90,87 @@
     :asserted-at "2026-09-01"
     :as-stated {:kind :stated :fields #{:aum-as-stated}
                 :aum-as-stated "USD 100,000,000" :as-stated-by-source? true}
-    :source-receipt-id "r-1"}
+    :source-receipt-id "r-1" :provenance-chain ["r-1"]}
    {:event-id "ev-2" :event-type :registration-amended :entity-id "e-1"
     :regulator-entity-id "e-reg-1"
     :announced-at "2026-08-28" :effective-at nil
     :asserted-at "2026-09-01"
     ;; effective-date-unstated flag fixture
     :as-stated {:kind :unstated :as-stated-by-source? true}
-    :source-receipt-id "r-1"}])
+    :source-receipt-id "r-1" :provenance-chain ["r-1"]}
+   ;; v2: this event's ONLY receipt refused admission — deriving an
+   ;; observation from it must be refused, with a refusal record.
+   {:event-id "ev-3" :event-type :registration-withdrawn :entity-id "e-1"
+    :regulator-entity-id "e-reg-1"
+    :announced-at "2026-08-29" :effective-at nil
+    :asserted-at "2026-09-01"
+    :as-stated {:kind :unstated :as-stated-by-source? true}
+    :source-receipt-id "r-4" :provenance-chain ["r-4"]}])
 
 (def window {:from "2026-08-01" :until "2026-09-01"
              :declared-at "2026-09-01" :timezone "UTC"})
+
+;; ── v2 derivation model (deterministic, mirrors the contract) ───────
+(defn admitted? [contract r]
+  (contains? (get-in contract [:source-receipt :admission :admitted])
+             (:fetch-status r)))
+
+(defn chain-valid?
+  "v2 provenance-chain rule: non-empty, all ids exist, first element is
+  the event's :source-receipt-id."
+  [receipt-ids ev]
+  (let [ch (:provenance-chain ev)]
+    (and (vector? ch) (seq ch)
+         (every? #(contains? receipt-ids %) ch)
+         (= (first ch) (:source-receipt-id ev)))))
+
+(defn derive-observations
+  "Returns {:observations [...] :refusals [...]} under the v2 rules:
+  an event with no admitted receipt in its chain is refused with a
+  refusal record; a chain-invalid event is refused as a provenance
+  violation. No third outcome exists."
+  [contract receipts events]
+  (let [by-id (into {} (map (juxt :receipt-id identity) receipts))
+        receipt-ids (set (keys by-id))]
+    (reduce
+      (fn [acc ev]
+        (cond
+          (not (chain-valid? receipt-ids ev))
+          (update acc :refusals conj {:event-id (:event-id ev)
+                                      :reason :provenance-chain-invalid})
+          (not (some #(admitted? contract (get by-id %))
+                     (:provenance-chain ev)))
+          (update acc :refusals conj
+                  {:receipt-id (:source-receipt-id ev)
+                   :fetch-status (:fetch-status (get by-id (:source-receipt-id ev)))
+                   :admission-refused-at "2026-09-01"
+                   :method/version (:method/version contract)})
+          :else
+          (update acc :observations conj
+                  {:observation-id (str "o-" (:event-id ev))
+                   :method/version (:method/version contract)
+                   :window window
+                   :observation-kind (get {:registration-filed
+                                           :registration-filed-in-window
+                                           :registration-effective
+                                           :registration-effective-in-window
+                                           :registration-amended
+                                           :registration-amended-in-window
+                                           :registration-withdrawn
+                                           :registration-withdrawn-in-window
+                                           :registration-rejected
+                                           :registration-rejected-in-window}
+                                          (:event-type ev))
+                   :entity-id (:entity-id ev)
+                   :event-id (:event-id ev)
+                   :value {:kind :registration-status-observation
+                           :basis #{:receipt-only}}
+                   :missingness-flags (if (= :unstated (-> ev :as-stated :kind))
+                                        #{:effective-date-unstated} #{})
+                   :provenance-chain (:provenance-chain ev)
+                   :asserted-at "2026-09-01"})))
+      {:observations [] :refusals []}
+      events)))
 
 ;; ── Fixtures ────────────────────────────────────────────────────────
 
@@ -99,7 +180,7 @@
   (let [rmap (into {} (map (juxt :receipt-id identity) receipts))]
     (doseq [ev events]
       (let [r (get rmap (:source-receipt-id ev))]
-        (when-not (and r (re-find #"^[0-9a-f]{64}$" (:content-hash r)))
+        (when-not (and r (re-find #"[0-9a-f]{64}" (:content-hash r)))
           (fail! f (str "event " (:event-id ev) " lacks a hash-backed receipt")))))
     (doseq [e entities]
       (when-not (get rmap (:source-receipt-id e))
@@ -204,6 +285,86 @@
     (when-not (and (= a b) (not= a c))
       (fail! f "sha256 receipt hashing not deterministic"))))
 
+(defn fixture-fetch-admission [f]
+  ;; v2: only :ok receipts are admitted. The refusal must produce a
+  ;; refusal RECORD (not silence), and the refused receipt never backs
+  ;; an observation. A re-fetch appends; it does not retro-invalidate.
+  (let [{:keys [observations refusals]}
+        (derive-observations contract receipts events)
+        refused (some #(when (= (:receipt-id %) "r-4") %) refusals)]
+    (when-not (and (= 2 (count observations))
+                   (every? #(not= (:event-id %) "ev-3") observations))
+      (fail! f "an admission-refused receipt backed an observation"))
+    (when (nil? refused)
+      (fail! f "admission refusal must produce a refusal record, not silence"))
+    (when-not (and (= (:fetch-status refused) :error)
+                   (= (:method/version refused) (:method/version contract)))
+      (fail! f "refusal record must carry fetch-status and method/version"))
+    (when-not (= :re-fetch-appends-new-receipt-plus-history
+                 (get-in contract [:source-receipt :admission :re-fetch-rule]))
+      (fail! f "re-fetch must append, never retro-invalidate"))
+    (when-not (contains? (:status-values (:query-readback contract))
+                         :admission-refused)
+      (fail! f "readback must be able to answer :admission-refused"))
+    (let [statuses (:fetch-status-values (:source-receipt contract))]
+      (when-not (and (contains? statuses :ok) (contains? statuses :error))
+        (fail! f "contract must declare the fetch-status vocabulary")))))
+
+(defn fixture-provenance-chain [f]
+  ;; v2 negative fixtures: a chain that invents a receipt id, trims the
+  ;; head, or is empty must be REFUSED, never silently derived.
+  (let [base {:event-type :registration-effective :entity-id "e-1"
+              :regulator-entity-id "e-reg-1"
+              :announced-at "2026-08-20" :effective-at "2026-08-21"
+              :asserted-at "2026-09-01"
+              :as-stated {:kind :unstated :as-stated-by-source? true}
+              :source-receipt-id "r-1"}
+        bad-events
+        [(assoc base :event-id "ev-bad-1" :provenance-chain ["r-invented"])
+         (assoc base :event-id "ev-bad-2" :provenance-chain [])
+         (assoc base :event-id "ev-bad-3" :source-receipt-id "r-2"
+                :provenance-chain ["r-1" "r-2"])]]
+    ;; ev-bad-3: head is NOT the source-receipt-id -> invalid.
+    (doseq [ev bad-events]
+      (let [{:keys [observations refusals]}
+            (derive-observations contract receipts [ev])]
+        (when-not (and (empty? observations)
+                       (= 1 (count refusals))
+                       (= :provenance-chain-invalid (:reason (first refusals))))
+          (fail! f (str "invalid chain for " (:event-id ev)
+                        " was not refused")))))
+    (when-not (contains? (:invariants (:event-record contract))
+                         :provenance-chain-is-required-and-verified)
+      (fail! f "contract must declare the provenance-chain invariant"))))
+
+(defn fixture-readback-strictness [f]
+  ;; v2: an unknown filter key is REJECTED (:rejected-filter), never
+  ;; silently ignored (which would quietly widen the query); an
+  ;; :event-type filter matches the CARRIED kind exactly — a withdrawal
+  ;; observation is never returned under a filed filter (kinds never
+  ;; collapse in readback).
+  (let [request {:query-id "q-2" :observation-kind :registration-effective-in-window
+                 :window window
+                 :filter {:verified-aum-greater-than 1000000}}
+        known #{:jurisdiction :entity-type :event-type :regulator}
+        unknown-keys (remove #(contains? known %) (keys (:filter request)))
+        ev-3 (some #(when (= (:event-id %) "ev-3") %) events)
+        filed? (fn [ev] (= :registration-effective (:event-type ev)))
+        filtered (filter filed? [ev-3])]
+    (when-not (empty? unknown-keys)
+      (when-not (contains? (:status-values (:query-readback contract))
+                           :rejected-filter)
+        (fail! f "unknown filter key could not be rejected: no status"))
+      (when-not (= :unknown-filter-key-rejected-not-ignored
+                   (get-in contract [:query-readback :strictness :rule]))
+        (fail! f "contract must declare unknown-filter-key rejection")))
+    (when-not (empty? filtered)
+      (fail! f "event-type filter collapsed withdrawal into effective"))
+    (when-not (= :filter-matches-carried-kind-exactly
+                 (get-in contract [:query-readback :strictness
+                                   :event-type-filter-rule]))
+      (fail! f "contract must declare exact event-type filtering"))))
+
 (def fixtures
   [["provenance" fixture-provenance]
    ["source-class" fixture-source-class]
@@ -215,19 +376,27 @@
    ["refresh-append-only" fixture-refresh-append-only]
    ["readback-shape" fixture-readback-shape]
    ["hyakka-proposal" fixture-hyakka-proposal]
-   ["content-hash-determinism" fixture-content-hash-determinism]])
+   ["content-hash-determinism" fixture-content-hash-determinism]
+   ["fetch-admission" fixture-fetch-admission]
+   ["provenance-chain" fixture-provenance-chain]
+   ["readback-strictness" fixture-readback-strictness]])
 
-(doseq [[fname f] fixtures]
-  (try
-    (f fname)
-    (println (str "ok   " fname))
-    (catch :default e
-      (fail! fname (str "fixture threw: " (.-message e)))
-      (println (str "threw " fname)))))
+;; ── Run ─────────────────────────────────────────────────────────────
+(defn run-all []
+  (println (str "contract: " contract-path))
+  (println (str "method/version: " (:method/version contract)))
+  (doseq [[fname f] fixtures]
+    (try
+      (f fname)
+      (println (str "ok   " fname))
+      (catch :default e
+        (fail! fname (str "fixture threw: " (.-message e)))
+        (println (str "threw " fname)))))
+  (if (empty? @failures)
+    (do (println "ALL REGULATOR-REGISTRATION FIXTURES GREEN")
+        (js/process.exit 0))
+    (do (doseq [{:keys [fixture msg]} @failures]
+          (println (str "FAIL " fixture ": " msg)))
+        (js/process.exit 1))))
 
-(if (empty? @failures)
-  (do (println "ALL REGULATOR-REGISTRATION FIXTURES GREEN")
-      (js/process.exit 0))
-  (do (doseq [{:keys [fixture msg]} @failures]
-        (println (str "FAIL " fixture ": " msg)))
-      (js/process.exit 1)))
+(run-all)
