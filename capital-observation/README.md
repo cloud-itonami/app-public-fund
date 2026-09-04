@@ -232,6 +232,27 @@ Verify deterministically (offline, no network):
 ```bash
 nbb tools/manager_affiliation_fixtures.cljs
 ```
+
+v2 additions (2026-09-03):
+
+- **Fetch-status admission**: `:receipt-admission` declares
+  `:fetch-status-ok-required`. A receipt whose fetch was not `:ok` is
+  still recorded (`missing-is-unmeasured`) but backs no observation
+  and flags `:fetch-status-non-ok`.
+- **Event-level provenance**: every manager/GP naming event carries a
+  `:provenance-chain` of receipt ids that must all exist; a chain
+  citing a missing receipt is `:provenance-chain-incomplete` —
+  unmeasured, never inferred. A naming claim that cannot be traced
+  back is not carried forward as a naming.
+- **Hardened conflict record**: the `:conflict-observation` now carries
+  ALL competing receipt ids as its provenance, its derived value is
+  `:unmeasured`, the contract declares no winner-picking mechanism
+  (`no-winner-mechanism true`), and a new invariant
+  `disagreement-never-hardens-into-a-naming` keeps a cross-source
+  disagreement from ever becoming an affiliation claim.
+- Fixture runner extended to 16 fixtures (3 new), with a negative
+  check: run against the v1 contract it reports failures and exits 1.
+
 ## financing-round-observation.edn
 
 `financing-round-observation.v1` — observes **announced startup financing
