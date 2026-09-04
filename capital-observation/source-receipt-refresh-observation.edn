@@ -17,13 +17,33 @@
 ;; verification makes its dependent observations UNMEASURED, never
 ;; silently re-based.
 ;;
-;; Method version: v1 (2026-09-01). Any change to field semantics bumps
+;; Method version: v2 (2026-09-03). Any change to field semantics bumps
 ;; :method/version and appends a :refresh/history entry; old audit
 ;; records are never silently reinterpreted.
+;;
+;; v2 hardening (source-receipt-refresh-observation.v1 -> v2, no
+;; semantics silently changed):
+;; 1. Fetch-status ADMISSION — a receipt carries an explicit fetch status
+;;    (:ok, :error, :redirected, :not-modified, :robots-disallowed,
+;;    :auth-required). Only :ok receipts are ADMITTED into the
+;;    verification cycle; every other status is recorded verbatim but
+;;    refuses admission
+;;    (:admission-refused-receipt-enters-no-verification-cycle). A
+;;    receipt that verified :ok earlier and re-fetches as :error does
+;;    not retro-actively invalidate prior verifications — the re-fetch
+;;    is a new receipt plus a refresh-history entry, never an edit.
+;; 2. Verification-level provenance — every verification record carries
+;;    a required :provenance-chain (ordered receipt ids, all existing,
+;;    first element = its :receipt-id). A history entry inherits the
+;;    chain of the verification it records; inventing or trimming
+;;    receipts is a violation.
+;; 3. Readback strictness — an unknown filter key is REJECTED, not
+;;    ignored; a :kind filter never returns a record whose kind differs
+;;    (a :verification filter never returns a :duplicate record).
 
 {:contract/id :source-receipt-refresh-observation
- :contract/version "1.0.0"
- :method/version "source-receipt-refresh-observation.v1"
+ :contract/version "2.0.0"
+:method/version "source-receipt-refresh-observation.v2"
  :actor :cloud-itonami/app-public-fund
  :proposes-to :network-awai/app-hyakka
 
@@ -46,6 +66,19 @@
            :captured-at :content-hash :fetch-status]
   :content-hash {:algo "sha256" :of "response-body-bytes"}
   :identity-rule :receipt-id-is-derived-from-content-hash-and-source-url
+  :fetch-status-values #{:ok :error :redirected :not-modified
+                         :robots-disallowed :auth-required}
+  ;; v2 admission gate: only :ok receipts may enter the verification
+  ;; cycle (and hence back any integrity observation).
+  :admission {:admitted #{:ok}
+              :refusal-record {:schema [:receipt-id :fetch-status
+                                        :admission-refused-at
+                                        :method/version]}
+              :rule :admission-refused-receipt-enters-no-verification-cycle
+              ;; an earlier :ok receipt that later re-fetches as :error
+              ;; does not retro-invalidate prior verifications; the
+              ;; re-fetch appends, never edits.
+              :re-fetch-rule :re-fetch-appends-new-receipt-plus-history}
   ;; same bytes from the same source captured again = the SAME receipt
   ;; (deduplicated), never a second observation.
   :dedup {:rule :same-content-hash-and-source-url-collapse-to-one-receipt
@@ -71,8 +104,18 @@
                                                   :content-hash-mismatch
                                                   :source-unreachable
                                                   :fetch-status-changed]}
-           :dependent-observation-count]
-  :invariant :failing-verification-marks-dependents-unmeasured
+           :dependent-observation-count
+           :provenance-chain]                ; v2: required
+  :invariants #{:failing-verification-marks-dependents-unmeasured
+                :provenance-chain-is-required-and-verified
+                :admission-refused-receipt-enters-no-verification-cycle}
+  ;; v2: the chain is ordered receipt ids — all existing, non-empty,
+  ;; first element = this record's :receipt-id. Inventing or trimming
+  ;; receipts is a violation
+  ;; (:provenance-chain-is-required-and-verified).
+  :provenance-chain-rule
+  {:non-empty? true :subset-of-receipt-ids? true
+   :first-element-is-receipt-id? true}
   :rule :verification-is-not-a-claim-about-the-world
         ; a mismatch says "bytes changed", never "the fact was wrong"
   }
@@ -90,6 +133,11 @@
   :entry-hash {:algo "sha256" :of "serialized-history-entry-bytes"}
   :audit-event-types #{:history-edit :history-delete-attempt
                        :entry-hash-mismatch}
+  ;; v2: a re-observation that finds changed bytes appends a NEW receipt
+  ;; plus a history entry recording the re-observation — it never edits
+  ;; or deletes the prior receipt, verification or history entry
+  ;; (mismatch-appends-never-edits).
+  :mismatch-rule :mismatch-appends-never-edits
   :rule :append-only-violation-is-an-observation-not-a-repair}
 
  ;; ── Missingness / coverage flags ───────────────────────────────────
@@ -159,4 +207,12 @@
   :readback-schema [:observations :next-cursor :coverage :missingness-flags
                     :method/version :window]
   :paging {:stable-order-by :observation-id :page-size 100}
+  :status-values #{:ok :unmeasured :out-of-window :rejected-filter
+                   :admission-refused}
+  ;; v2: unknown filter keys are rejected, never silently ignored; a
+  ;; :kind filter matches the carried kind exactly — a :verification
+  ;; filter never returns a :duplicate or :append-only-violation record,
+  ;; so integrity record kinds never collapse in readback.
+  :strictness {:rule :unknown-filter-key-rejected-not-ignored
+               :kind-filter-rule :filter-matches-carried-kind-exactly}
   :invariant :readback-always-carries-coverage-and-missingness}}

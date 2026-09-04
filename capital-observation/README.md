@@ -337,9 +337,40 @@ hash-backed claims, proposed to Hyakka as auditable questions.
   `:out-of-window` outside the window), append-only refresh history,
   questions-only Hyakka proposal, and a deterministic readback that
   always carries coverage + missingness + provenance.
+## Source receipt refresh observation contract (`source-receipt-refresh-observation.edn`)
+
+`source-receipt-refresh-observation.edn` is the **integrity plane**
+beneath the other capital observation contracts: it observes the source
+receipts and the append-only refresh history themselves — byte identity,
+duplicate collapse, provenance-chain integrity, discovery-only class
+escape, and history edit-detection — proposed to Hyakka as auditable
+questions. It observes evidence records, not markets, funds or companies.
+
+- **v2 hardening** (`source-receipt-refresh-observation.v2`, 2026-09-03):
+  receipts carry an explicit fetch status (`:ok :error :redirected
+  :not-modified :robots-disallowed :auth-required`) and only `:ok`
+  receipts are admitted into the verification cycle — a refused admission
+  produces a refusal record, never silence, and never a retro-invalidation
+  of earlier verifications (a re-fetch appends a new receipt plus a
+  history entry). Every verification record carries a required
+  `:provenance-chain` (all ids exist, head = its `:receipt-id`), and a
+  changed-bytes re-observation appends — it never edits or deletes the
+  prior receipt, verification or history entry
+  (`mismatch-appends-never-edits`). Readback is strict: an unknown filter
+  key answers `:rejected-filter` instead of being ignored, and a `:kind`
+  filter matches the carried kind exactly, so a `:verification` filter
+  never returns a `:duplicate` record.
+- Same guarantees as the other contracts: hash-backed verbatim receipts,
+  discovery-only classes never back observations, time-bounded windows,
+  missingness flags (`missing-is-unmeasured`), failing verification makes
+  dependents UNMEASURED (never re-based), no rank/score/centrality/
+  ownership/suitability fields by construction, questions-only Hyakka
+  proposal, and a deterministic readback that always carries coverage +
+  missingness.
 
 Verify deterministically (offline, no network):
 
 ```bash
 nbb tools/co_investment_fixtures.cljs
+nbb tools/source_receipt_refresh_fixtures.cljs
 ```
