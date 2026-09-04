@@ -358,6 +358,51 @@ hash-backed claims, proposed to Hyakka as auditable questions.
   `:out-of-window` outside the window), append-only refresh history,
   questions-only Hyakka proposal, and a deterministic readback that
   always carries coverage + missingness + provenance.
+## Fund service-provider observation contract (`fund-service-provider-observation.edn`)
+
+`fund-service-provider-observation.edn`
+(`fund-service-provider-observation.v1`) is a bounded actor contract for
+observing **fund service-provider namings** — "source S named provider P
+in role R for fund vehicle F at time T" (auditor, administrator,
+custodian, transfer agent, placement agent) — as first-party or
+regulator/registry-backed, hash-backed claims, proposed to Hyakka as
+auditable questions.
+
+- A provider naming is a source's own statement. It is **not** a
+  verified or current engagement, not a fee/compensation or revenue
+  fact, not an endorsement, and never a diligence opinion about either
+  party (`naming-is-not-verified-engagement`,
+  `naming-is-not-fee-or-revenue-fact`).
+- Roles are carried as the source's own words and never collapsed
+  (`role-is-carried-not-collapsed`); an unstated role is carried as
+  `:unstated`, never guessed from context or a directory.
+- Only first-party (fund / manager) and official regulator / registry /
+  filing sources may back a derived observation; news reports and
+  scraped provider directories are discovery-only. Same guarantees as
+  the other contracts: sha256-backed verbatim receipts, `fetch-status
+  :ok` admission, hard entity separation (a provider, a fund vehicle,
+  its management company and its GP stay distinct even when they share
+  a brand), participant ids must resolve to declared entities, half-open
+  time-bounded windows (`missing-is-unmeasured`, `:out-of-window`
+  outside the window), append-only refresh history (a retraction
+  appends, the naming record is never edited), no
+  rank/score/returns/ownership/fee/suitability fields by construction,
+  questions-only Hyakka proposal, and a deterministic readback that
+  always carries coverage + missingness + provenance.
+- **Cross-source conflict**: when two allowed sources disagree about
+  the same (fund-vehicle, provider, role) naming in the same window,
+  the disagreement is carried as a `:conflict-observation` with both
+  receipts. Resolution is always `:carry-both-never-resolve` — no
+  winner is picked, and a conflict never resolves into a
+  verified-engagement claim. One source's naming plus another source's
+  silence is not a conflict — silence is unmeasured.
+
+Verify deterministically (offline, no network):
+
+```bash
+nbb tools/fund_service_provider_fixtures.cljs
+```
+
 ## Source receipt refresh observation contract (`source-receipt-refresh-observation.edn`)
 
 `source-receipt-refresh-observation.edn` is the **integrity plane**
