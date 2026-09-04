@@ -9,6 +9,11 @@
 ;;   2  REFUSED — a fixture could not run
 ;;
 ;; Usage: nbb tools/portfolio_listing_fixtures.cljs [path/to/contract.edn]
+;;
+;; v2 (2026-09-04): fetch-status admission gate, required event-level
+;; provenance chains, and strict readback (unknown filter keys rejected,
+;; listing-kind filters match exactly). Negative fixtures construct
+;; violating inputs and assert the derivation REFUSES them.
 
 (ns portfolio-listing-fixtures
   (:require ["fs" :as fs]
@@ -57,7 +62,12 @@
    ;; same jurisdiction does NOT show ALPHA as listed — a first-party
    ;; disagreement with r-1 about the same pair.
    (receipt "r-4" "https://registry.example.test/REG-F" :official-company-registry "ja"
-            "REG-F: no portfolio-company listings recorded")])
+            "REG-F: no portfolio-company listings recorded")
+   ;; v2: a receipt whose fetch FAILED. Recorded verbatim, but it refuses
+   ;; admission — it can never back a derived observation.
+   (assoc (receipt "r-5" "https://example-fund.test/portfolio" :fund-first-party "en"
+                   "ALPHA K.K. listed on Fund I portfolio (fetch failed)")
+          :fetch-status :error)])
 
 (def entities
   [{:entity-id "e-1" :entity-type :management-company :name "EXAMPLE MANAGER"
@@ -83,22 +93,85 @@
     :fund-vehicle-entity-id "e-3" :portfolio-company-entity-id "e-2"
     :observed-at "2026-08-20" :asserted-at "2026-09-01"
     :listing {:kind :listed-on-portfolio-page :as-stated-by-source? true}
-    :source-receipt-id "r-1"}
+    :source-receipt-id "r-1" :provenance-chain ["r-1"]}
    ;; A name disappearing from the page is a NEW removal observation.
    {:event-id "ev-2" :event-type :removed-from-portfolio-page
     :fund-vehicle-entity-id "e-3" :portfolio-company-entity-id "e-2"
     :observed-at "2026-08-31" :asserted-at "2026-09-01"
     :listing {:kind :removed-from-portfolio-page :as-stated-by-source? true}
-    :source-receipt-id "r-2"}
+    :source-receipt-id "r-2" :provenance-chain ["r-2"]}
    {:event-id "ev-3" :event-type :listed-on-portfolio-page
     :fund-vehicle-entity-id "e-3" :portfolio-company-entity-id "e-4"
     :observed-at "2026-08-20" :asserted-at "2026-09-01"
     ;; jurisdiction-not-in-receipt → flag, do not vanish
     :listing {:kind :unstated :as-stated-by-source? true}
-    :source-receipt-id "r-2"}])
+    :source-receipt-id "r-2" :provenance-chain ["r-2"]}
+   ;; v2: this event's ONLY receipt refused admission — deriving an
+   ;; observation from it must be refused, with a refusal record.
+   {:event-id "ev-4" :event-type :listed-on-portfolio-page
+    :fund-vehicle-entity-id "e-3" :portfolio-company-entity-id "e-2"
+    :observed-at "2026-08-25" :asserted-at "2026-09-01"
+    :listing {:kind :listed-on-portfolio-page :as-stated-by-source? true}
+    :source-receipt-id "r-5" :provenance-chain ["r-5"]}])
 
 (def window {:from "2026-08-01" :until "2026-09-01"
              :declared-at "2026-09-01" :timezone "UTC"})
+
+;; ── v2 derivation model (deterministic, mirrors the contract) ───────
+(defn admitted? [contract r]
+  (contains? (get-in contract [:source-receipt :admission :admitted])
+             (:fetch-status r)))
+
+(defn chain-valid?
+  "v2 provenance-chain rule: non-empty, all ids exist, first element is
+  the event's :source-receipt-id."
+  [receipt-ids ev]
+  (let [ch (:provenance-chain ev)]
+    (and (vector? ch) (seq ch)
+         (every? #(contains? receipt-ids %) ch)
+         (= (first ch) (:source-receipt-id ev)))))
+
+(defn derive-observations
+  "Returns {:observations [...] :refusals [...]} under the v2 rules:
+  an event with no admitted receipt in its chain is refused with a
+  refusal record; a chain-invalid event is refused as a provenance
+  violation. No third outcome exists."
+  [contract receipts events]
+  (let [by-id (into {} (map (juxt :receipt-id identity) receipts))
+        receipt-ids (set (keys by-id))]
+    (reduce
+      (fn [acc ev]
+        (cond
+          (not (chain-valid? receipt-ids ev))
+          (update acc :refusals conj {:event-id (:event-id ev)
+                                      :reason :provenance-chain-invalid})
+          (not (some #(admitted? contract (get by-id %))
+                     (:provenance-chain ev)))
+          (update acc :refusals conj
+                  {:receipt-id (:source-receipt-id ev)
+                   :fetch-status (:fetch-status (get by-id (:source-receipt-id ev)))
+                   :admission-refused-at "2026-09-01"
+                   :method/version (:method/version contract)})
+          :else
+          (update acc :observations conj
+                  {:observation-id (str "o-" (:event-id ev))
+                   :method/version (:method/version contract)
+                   :window window
+                   :observation-kind (get {:listed-on-portfolio-page
+                                           :listed-on-portfolio-page-in-window
+                                           :removed-from-portfolio-page
+                                           :removed-from-portfolio-page-in-window}
+                                          (:event-type ev))
+                   :fund-vehicle-entity-id (:fund-vehicle-entity-id ev)
+                   :portfolio-company-entity-id (:portfolio-company-entity-id ev)
+                   :event-id (:event-id ev)
+                   :value {:kind :listing-observation :basis #{:receipt-only}}
+                   :missingness-flags (if (= :unstated (-> ev :listing :kind))
+                                        #{:listing-kind-unstated} #{})
+                   :provenance-chain (:provenance-chain ev)
+                   :asserted-at "2026-09-01"})))
+      {:observations [] :refusals []}
+      events)))
 
 ;; v1.1: two first-party sources disagree about the same
 ;; (fund-vehicle, portfolio-company) pair in the same window. Both
@@ -174,19 +247,102 @@
     (when (in? "2026-09-01") (fail! f "until is exclusive; 2026-09-01 must be out"))))
 
 (defn fixture-derived-observation [f]
-  ;; No forbidden field may appear in a derived observation record.
+  ;; No forbidden field may appear in a derived observation record, and
+  ;; (v2) the observation carries its event's provenance-chain exactly.
   (let [{:keys [forbidden-fields]} (:derived-observation contract)
-        obs {:observation-id "o-1" :method/version (:method/version contract)
-             :window window :observation-kind :listed-on-portfolio-page-in-window
-             :fund-vehicle-entity-id "e-3" :portfolio-company-entity-id "e-2"
-             :event-id "ev-1"
-             :value {:kind :listing-observation :basis #{:receipt-only}}
-             :missingness-flags #{}
-             :provenance-chain ["r-1"]
-             :asserted-at "2026-09-01"}
-        keys' (set (map keyword (keys obs)))]
-    (when (some #(contains? keys' (keyword (name %))) forbidden-fields)
-      (fail! f "derived observation carries a forbidden field"))))
+        {:keys [observations refusals]} (derive-observations contract receipts events)
+        obs (some #(when (= (:event-id %) "ev-1") %) observations)]
+    (when (nil? obs) (fail! f "ev-1 must derive an observation"))
+    (let [keys' (set (map keyword (keys obs)))]
+      (when (some #(contains? keys' (keyword (name %))) forbidden-fields)
+        (fail! f "derived observation carries a forbidden field")))
+    (when-not (= (:provenance-chain obs) ["r-1"])
+      (fail! f "observation must carry its event's provenance-chain exactly"))
+    (when-not (contains? (set (map :receipt-id refusals)) "r-5")
+      (fail! f "ev-4 (admission-refused receipt r-5) must not derive an observation"))))
+
+(defn fixture-fetch-admission [f]
+  ;; v2: only :ok receipts are admitted. The refusal must produce a
+  ;; refusal RECORD (not silence), and the refused receipt never backs
+  ;; an observation. A re-fetch appends; it does not retro-invalidate.
+  (let [{:keys [observations refusals]}
+        (derive-observations contract receipts events)
+        refused (some #(when (= (:receipt-id %) "r-5") %) refusals)]
+    (when-not (and (= (count observations) 3)
+                   (every? #(not= (:event-id %) "ev-4") observations))
+      (fail! f "an admission-refused receipt backed an observation"))
+    (when (nil? refused)
+      (fail! f "admission refusal must produce a refusal record, not silence"))
+    (when-not (and (= (:fetch-status refused) :error)
+                   (= (:method/version refused) (:method/version contract)))
+      (fail! f "refusal record must carry fetch-status and method/version"))
+    (when-not (= :re-fetch-appends-new-receipt-plus-history
+                 (get-in contract [:source-receipt :admission :re-fetch-rule]))
+      (fail! f "re-fetch must append, never retro-invalidate"))
+    (when-not (contains? (:status-values (:query-readback contract))
+                         :admission-refused)
+      (fail! f "readback must be able to answer :admission-refused"))
+    (let [statuses (:fetch-status-values (:source-receipt contract))]
+      (when-not (and (contains? statuses :ok) (contains? statuses :error))
+        (fail! f "contract must declare the fetch-status vocabulary")))))
+
+(defn fixture-provenance-chain [f]
+  ;; v2 negative fixtures: a chain that invents a receipt id, trims the
+  ;; head, or is empty must be REFUSED, never silently derived.
+  (let [base {:event-type :listed-on-portfolio-page
+              :fund-vehicle-entity-id "e-3" :portfolio-company-entity-id "e-2"
+              :observed-at "2026-08-20" :asserted-at "2026-09-01"
+              :listing {:kind :listed-on-portfolio-page :as-stated-by-source? true}}
+        bad-events
+        [(assoc base :event-id "ev-bad-1" :source-receipt-id "r-1"
+                :provenance-chain ["r-invented"])
+         (assoc base :event-id "ev-bad-2" :source-receipt-id "r-1"
+                :provenance-chain [])
+         (assoc base :event-id "ev-bad-3" :source-receipt-id "r-2"
+                :provenance-chain ["r-1" "r-2"])]]
+    ;; ev-bad-3: head is NOT the source-receipt-id -> invalid.
+    (doseq [ev bad-events]
+      (let [{:keys [observations refusals]}
+            (derive-observations contract receipts [ev])]
+        (when-not (and (empty? observations)
+                       (= 1 (count refusals))
+                       (= :provenance-chain-invalid (:reason (first refusals))))
+          (fail! f (str "invalid chain for " (:event-id ev)
+                        " was not refused")))))
+    (when-not (contains? (:invariants (:event-record contract))
+                         :provenance-chain-is-required-and-verified)
+      (fail! f "contract must declare the provenance-chain invariant"))))
+
+(defn fixture-listing-kind-readback [f]
+  ;; v2: a :listing-kind filter matches the CARRIED kind exactly — a
+  ;; removal observation is never returned under a listed filter
+  ;; (listed vs removed never collapse in readback).
+  (let [ev-2 (some #(when (= (:event-id %) "ev-2") %) events)
+        listed? (fn [ev] (= :listed-on-portfolio-page (-> ev :listing :kind)))
+        filtered (filter listed? [ev-2])]
+    (when-not (empty? filtered)
+      (fail! f "listing-kind filter collapsed removed into listed"))
+    (when-not (= :filter-matches-carried-kind-exactly
+                 (get-in contract [:query-readback :strictness
+                                   :listing-kind-filter-rule]))
+      (fail! f "contract must declare exact listing-kind filtering"))))
+
+(defn fixture-unknown-filter-key [f]
+  ;; v2: an unknown filter key is REJECTED (:rejected-filter), never
+  ;; silently ignored (which would quietly widen the query).
+  (let [request {:query-id "q-2" :observation-kind :listed-on-portfolio-page-in-window
+                 :window window
+                 :filter {:ownership-stake-greater-than 5}}
+        known #{:jurisdiction :fund-vehicle-entity-id
+                :portfolio-company-entity-id :listing-kind}
+        unknown-keys (remove #(contains? known %) (keys (:filter request)))]
+    (when-not (empty? unknown-keys)
+      (when-not (contains? (:status-values (:query-readback contract))
+                           :rejected-filter)
+        (fail! f "unknown filter key could not be rejected: no status"))
+      (when-not (= :unknown-filter-key-rejected-not-ignored
+                   (get-in contract [:query-readback :strictness :rule]))
+        (fail! f "contract must declare unknown-filter-key rejection")))))
 
 (defn fixture-refresh-history [f]
   (let [h {:history-id "h-1" :observation-id "o-1"
@@ -275,6 +431,10 @@
    "not-ownership" fixture-not-ownership
    "window-bounds" fixture-window
    "derived-observation" fixture-derived-observation
+   "fetch-admission" fixture-fetch-admission
+   "provenance-chain" fixture-provenance-chain
+   "listing-kind-readback" fixture-listing-kind-readback
+   "unknown-filter-key" fixture-unknown-filter-key
    "refresh-history" fixture-refresh-history
    "readback" fixture-readback
    "coverage-missingness" fixture-coverage-missingness
