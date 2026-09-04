@@ -1,0 +1,166 @@
+;; co-investment-observation.edn — bounded actor contract for observing
+;; PUBLIC co-investment listings: "source S listed participant entities X
+;; and Y together in the same financing round R at time T", proposed to
+;; Hyakka (network-awai/app-hyakka) as auditable questions, not as a score.
+;;
+;; Scope guard: this contract observes CO-LISTING (adjacency) claims made
+;; by allowed sources. It is a NETWORK OBSERVATION, not a network score:
+;; no centrality, no influence, no ranking of funds, LPs, managers or
+;; startups, no inference of syndication strategy, alignment, ownership
+;; or endorsement from a co-listing. Two entities appearing in the same
+;; round means exactly "the source listed them together" — nothing more.
+;; It produces no investment advice and no personal profiling.
+;;
+;; Method version: v1 (2026-09-04). Any change to field semantics bumps
+;; :method/version and appends a :refresh/history entry; old observations
+;; are never silently reinterpreted.
+
+{:contract/id :co-investment-observation
+ :contract/version "1.0.0"
+ :method/version "co-investment-observation.v1"
+ :actor :cloud-itonami/app-public-fund
+ :proposes-to :network-awai/app-hyakka
+
+ ;; ── Measurement window ─────────────────────────────────────────────
+ ;; Half-open [from, until) in UTC ISO-8601 dates. "missing" inside a
+ ;; window means "not measured in this window", never "nothing happened"
+ ;; and never "these entities never co-invested".
+ :window
+ {:schema [:from :until :declared-at :timezone]
+  :format "YYYY-MM-DD"
+  :closed? false                       ; [from, until)
+  :rule :window-must-not-overlap-within-same-source-and-method}
+
+ ;; ── Source receipts ────────────────────────────────────────────────
+ ;; Every observation cites exactly one receipt, captured verbatim
+ ;; (bytes hash + fetch metadata) before any parsing.
+ :source-receipt
+ {:schema [:receipt-id :source-url :source-class :source-language
+           :observed-at :content-hash :fetch-status]
+  :content-hash {:algo "sha256" :of "response-body-bytes"}
+  :source-class-allow #{:official-regulator :official-stock-exchange-filing
+                        :official-company-registry :company-first-party
+                        :fund-first-party :manager-first-party
+                        :institutional-lp-first-party :official-board-record}
+  :source-class-forbid #{:search-snippet :generated-summary :scraped-directory
+                         :social-post :broker-list :paywall-bypass
+                         :captcha-bypass}
+  ;; discovery-only pointers can never back a derived observation.
+  :source-class-discovery-only #{:news-report :licensed-commercial-aggregator}
+  :fetch {:respect-robots? true :respect-auth-waf-captcha? true
+          :user-agent "app-public-fund-co-investment-observation/1.0"}}
+
+ ;; ── Typed entity/event inputs ──────────────────────────────────────
+ ;; Entity separation is a hard invariant: the company, the fund vehicle,
+ ;; the management company and the limited partner are distinct entities
+ ;; even when they share a brand name (brand-is-not-legal-entity). Each
+ ;; edge endpoint is bound to its own entity id, never to a name string.
+ :entity-types #{:company :fund-vehicle :management-company
+                 :general-partner :limited-partner :jurisdiction
+                 :round-vehicle}
+ :event-types #{:round-participants-listed :co-listing-retracted}
+ :entity-record
+ {:schema [:entity-id :entity-type :name :legal-name :jurisdiction
+           :identifier-class :identifier-value :source-receipt-id
+           :asserted-at :observed-at]
+  :invariant :one-entity-type-per-entity-id
+  :identifier-invariant [:identifier-value-unique-across-entity-types
+                         :one-identifier-per-entity-id]
+  :note "A brand string never auto-creates a legal entity."}
+ :event-record
+ {:schema [:event-id :event-type :round-id :announced-at :asserted-at
+           :participant-entity-ids            ; >= 2, each bound to an entity id
+           :listing-kind {:kind [:one-of :named-investors :named-underwriters
+                           :named-consortium :named-lp-group]}
+           :as-stated-by-source? true
+           :source-receipt-id
+           :provenance-chain]                 ; receipt ids, verbatim order
+  :invariants [:participant-ids-resolve-to-declared-entities
+               :provenance-chain-required-on-every-event
+               :listing-kind-is-carried-not-collapsed]}
+
+ ;; ── Receipt admission (v1) ─────────────────────────────────────────
+ ;; A receipt whose fetch did not fully succeed backs no derived
+ ;; observation and flags :fetch-status-non-ok.
+ :receipt-admission
+ {:rule :fetch-status-ok-required
+  :admit-when #{:ok}
+  :else {:missingness-flag :fetch-status-non-ok :backs-observation? false}}
+
+ ;; ── Derived observation ────────────────────────────────────────────
+ ;; The derived observation is a single EDGE record: (round, entity-A,
+ ;; entity-B, listing-kind, receipt). It is symmetric and unordered —
+ ;; the contract never assigns roles like "lead" unless the source
+ ;; itself names one, and even then the role is carried as the source's
+ ;; word (:named-role), not verified.
+ :derived-observation
+ {:schema [:observation-id :edge :round-id :listing-kind
+           :window :observed-at :source-receipt-id
+           :provenance-chain :missingness-flags]
+  :window-scoping :valid-only-inside-window
+  :edge {:kind :co-listed-in-same-round
+         :symmetric? true
+         :semantics "source S listed A and B together in round R"
+         :not #{:syndication :alignment :endorsement :influence
+                :follow-on :relationship}}
+  ;; Forbidden by construction: any field that would rank, score or
+  ;; characterize the edge or its endpoints.
+  :forbidden-fields #{:centrality :rank :score :degree-count
+                      :network-strength :influence :lead-lag-order
+                      :syndication-pattern :success-likelihood
+                      :valuation :returns :ownership-stake :suitability
+                      :recommendation}}
+
+ ;; ── Missingness / coverage flags ───────────────────────────────────
+ :missingness
+ {:flags #{:no-receipt :receipt-unparseable :participant-unstated
+           :participant-not-resolvable-to-entity :fetch-status-non-ok
+           :identifier-unstated :provenance-chain-incomplete
+           :single-participant-only :listing-kind-unstated}
+  :rule :missing-is-unmeasured
+  :note "\"missing\" means not measured in this window; it never means
+         \"no co-investment happened\" or \"nothing happened\"."}
+ :coverage
+ {:schema [:window :expected-observations :observed-count
+           :coverage-ratio :covered-participant-entities
+           :unstated-participant-events :coverage-flags]
+  :rule :coverage-is-reported-never-assumed}
+
+ ;; ── Refresh history ────────────────────────────────────────────────
+ ;; Append-only. Re-observation is a new receipt + a new history entry;
+ ;; an earlier observation is never deleted or reinterpreted. Two
+ ;; allowed sources disagreeing about the participant set of the same
+ ;; round yield TWO edge observations plus :receipt-disagreement flags —
+ ;; never a merged participant list.
+ :refresh/history
+ {:schema [:entry-id :at :method-version :change-summary
+           :source-receipt-id]
+  :rule :append-only-never-rewrite}
+
+ ;; ── Hyakka proposal (questions only) ───────────────────────────────
+ ;; The contract proposes auditable QUESTIONS. It never states answers
+ ;; as fact, never recommends, never scores.
+ :proposal
+ {:to :network-awai/app-hyakka
+  :kind :auditable-question
+  :example-questions
+  ["Which participant entities does source S list together in round R
+    inside window W?"
+   "For how many rounds in window W does source S list entity A
+    together with at least one other allowed-listed participant?"
+   "Which rounds in window W have only one listed participant, i.e.
+    produce no co-listing edge?"]
+  :never #{:investment-advice :ranking :score :suitability
+           :outreach :solicitation :fundraising :allocation
+           :personal-profiling}}
+
+ ;; ── Query / readback shape ─────────────────────────────────────────
+ ;; Deterministic readback: every answer carries its window, coverage
+ ;; and missingness. Outside the window the readback answers
+ ;; :out-of-window — never "still true", never "no longer true".
+ :query-readback
+ {:schema [:question-id :edge-or-count :window :observed-at
+           :coverage :missingness-flags :method-version
+           :provenance-chain]
+  :window-scoping :out-of-window-outside-window
+  :rule :readback-always-carries-coverage-and-missingness}}

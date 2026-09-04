@@ -149,6 +149,19 @@ proposed to Hyakka as auditable questions.
   `:carry-both-never-resolve` — no winner is picked, the pair is flagged
   `:first-party-source-conflict` wherever it appears downstream, and a
   conflict never resolves into an ownership or current-holding claim.
+- **v2 — hardening**: (1) fetch-status **admission gate** — only `:ok`
+  receipts are admitted to back a derived observation; every other
+  fetch status is recorded verbatim but produces a refusal record
+  (`:admission-refused-receipt-backs-no-observation`), and a re-fetch
+  appends a new receipt + history entry rather than retro-invalidating
+  derived observations. (2) required **event-level provenance chains** —
+  every event carries an ordered, receipt-exact `:provenance-chain`
+  (non-empty, all ids exist, head = `:source-receipt-id`), and the
+  derived observation carries its event's chain exactly. (3) **strict
+  readback** — unknown filter keys answer `:rejected-filter` instead of
+  being silently ignored, and a `:listing-kind` filter matches the
+  carried kind exactly (a removal is never returned under a listed
+  filter).
 
 Verify deterministically (offline, no network):
 
@@ -159,7 +172,7 @@ nbb tools/portfolio_listing_fixtures.cljs
 ## Coverage rollup contract
 
 `coverage-rollup-observation.edn`
-(`coverage-rollup-observation.v1`) is a compositional contract that
+(`coverage-rollup-observation.v2`) is a compositional contract that
 aggregates the per-window coverage records the observation kinds already
 emit, per coverage-unit × observation-kind. It is measurement of
 measurement: how much of a window is measured and what is unmeasured.
@@ -169,6 +182,13 @@ score — unmeasured units are emitted as rows, never silence, and
 forbidden. Same window shape, append-only refresh history, and readback
 discipline (one method/version per page, every response carries
 coverage + missingness, `:unmeasured` is not zero).
+
+v2 hardening: fetch-status admission and provenance-chain completeness.
+A coverage record whose backing receipts include a non-`:ok` fetch backs
+no rollup count, and a record whose receipt chain does not resolve is
+unmeasured; both are cited in `:excluded-inputs` with their flag
+(`:fetch-status-non-ok` / `:provenance-chain-incomplete`) — exclusion is
+visible, never a silent drop.
 
 ```bash
 nbb tools/coverage_rollup_fixtures.cljs
@@ -286,6 +306,37 @@ Verify deterministically (offline, no network):
 nbb tools/round_participant_fixtures.cljs
 ```
 
+## Co-investment adjacency observation contract (`co-investment-observation.edn`)
+
+`co-investment-observation.edn` (`co-investment-observation.v1`) is a
+bounded actor contract for observing **co-investment listings** —
+"source S listed participant entities X and Y together in the same
+financing round R at time T" — as registry- or first-party-backed,
+hash-backed claims, proposed to Hyakka as auditable questions.
+
+- `edge` is **adjacency only**: it means exactly "the source listed A
+  and B together in round R". It is symmetric and unordered, and the
+  contract structurally excludes interpreting it as syndication,
+  alignment, endorsement, influence, a relationship, or a follow-on.
+  A named role (e.g. "lead") is only ever carried as the source's own
+  word (`:listing-kind`), never verified.
+- This is a **network observation, not a network score**: no
+  centrality, degree counts, influence, network strength, ranking or
+  syndication patterns — those fields are forbidden by construction,
+  as are all rank/score/valuation/returns/ownership/suitability
+  fields. A round with a single listed participant produces no edge
+  and flags `:single-participant-only`.
+- Two allowed sources listing different participant sets for the same
+  round yield **two separate edge observations**, each bound to its own
+  receipt — never a merged participant list.
+- Same guarantees as the other contracts: sha256-backed verbatim
+  receipts, `fetch-status :ok` admission, hard entity separation (a
+  company, a fund vehicle and a limited partner sharing a brand stay
+  distinct), participant ids must resolve to declared entities,
+  half-open time-bounded windows (`missing-is-unmeasured`,
+  `:out-of-window` outside the window), append-only refresh history,
+  questions-only Hyakka proposal, and a deterministic readback that
+  always carries coverage + missingness + provenance.
 ## Source receipt refresh observation contract (`source-receipt-refresh-observation.edn`)
 
 `source-receipt-refresh-observation.edn` is the **integrity plane**
@@ -320,5 +371,6 @@ questions. It observes evidence records, not markets, funds or companies.
 Verify deterministically (offline, no network):
 
 ```bash
+nbb tools/co_investment_fixtures.cljs
 nbb tools/source_receipt_refresh_fixtures.cljs
 ```
