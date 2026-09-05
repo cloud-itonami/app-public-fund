@@ -464,6 +464,22 @@ hash-backed claims, proposed to Hyakka as auditable questions.
   `:out-of-window` outside the window), append-only refresh history,
   questions-only Hyakka proposal, and a deterministic readback that
   always carries coverage + missingness + provenance.
+- **v2 hardening** (`co-investment-observation.v2`, 2026-09-04):
+  receipts carry an explicit fetch status (`:ok :error :redirected
+  :not-modified :robots-disallowed :auth-required`) and only `:ok`
+  receipts are admitted to back a derived edge — a refused admission
+  produces a **refusal record** (never silence), never a
+  retro-invalidation of earlier edges (a re-fetch appends a new receipt
+  plus a history entry). Every event requires a `:provenance-chain`
+  (non-empty, all ids exist, head = its `:source-receipt-id`), and a
+  derived edge carries its event's chain **exactly** — invented,
+  empty or re-headed chains are refused (`:provenance-chain-invalid`),
+  never silently derived. Readback is strict: an unknown filter key
+  answers `:rejected-filter` instead of being ignored, and a
+  `:listing-kind` filter matches the carried kind exactly, so a
+  `:named-consortium` edge is never returned under a
+  `:named-investors` filter (listing kinds never collapse in readback).
+
 ## Fund service-provider observation contract (`fund-service-provider-observation.edn`)
 
 `fund-service-provider-observation.edn`
