@@ -1,0 +1,216 @@
+;; fund-vehicle-status-observation.edn — bounded actor contract for
+;; observing **stated fund-vehicle lifecycle status namings** — "source S
+;; named fund vehicle F as having lifecycle status K (investing / closed
+;; to new investment / fully invested / in wind-down / liquidated) as of
+;; time T" — as first-party or registry/securities-filing-backed,
+;; hash-backed claims, proposed to Hyakka (network-awai/app-hyakka) as
+;; auditable questions, not as a score.
+;;
+;; Scope guard: this contract observes the *status naming* plane only.
+;; It does NOT rank funds, GPs, LPs or startups, does not infer
+;; deployment pace, dry powder, TVPI/DPI or any fund-health measure from
+;; a status naming, and produces no investment advice. A status naming
+;; is the source's own statement about its own vehicle; it is not an
+;; audited state, a regulatory determination, or a performance fact.
+;;
+;; Method version: v1 (2026-09-06). Companion to the lifecycle-date
+;; contract (fund-term-and-vintage-observation): a stated date is not a
+;; status, and a status is not a date — the two are never collapsed.
+;; Any change to field semantics bumps :method/version and appends a
+;; :refresh/history entry; old observations are never silently
+;; reinterpreted.
+
+{:contract/id :fund-vehicle-status-observation
+ :contract/version "1.0.0"
+ :method/version "fund-vehicle-status-observation.v1"
+ :actor :cloud-itonami/app-public-fund
+ :proposes-to :network-awai/app-hyakka
+
+ ;; ── Measurement window ─────────────────────────────────────────────
+ ;; Observations are time-bounded. A window is a half-open interval
+ ;; [from, until) in UTC ISO-8601 dates. "missing" inside a window means
+ ;; "not measured in this window", never "nothing happened".
+ :window
+ {:schema [:from :until :declared-at :timezone]
+  :format "YYYY-MM-DD"
+  :closed? false
+  :rule :window-must-not-overlap-within-same-source-and-method}
+
+ ;; ── Source receipts ────────────────────────────────────────────────
+ ;; Every observation cites exactly one receipt. Receipts are captured
+ ;; verbatim (bytes hash + fetch metadata) before any parsing.
+ :source-receipt
+ {:schema [:receipt-id :source-url :source-class :source-language
+           :observed-at :content-hash :fetch-status]
+  :content-hash {:algo "sha256" :of "response-body-bytes"}
+  :fetch-status-vocabulary #{:ok :error :redirected :not-modified
+                             :robots-disallowed :auth-required}
+  :source-class-allow #{:fund-first-party :manager-first-party
+                        :official-regulator :official-stock-exchange-filing
+                        :official-company-registry}
+  :source-class-forbid #{:search-snippet :generated-summary :scraped-directory
+                         :social-post :broker-list :paywall-bypass
+                         :captcha-bypass}
+  ;; news-report and licensed-commercial-aggregator may be carried as
+  ;; discovery-only pointers; they can never back a derived observation.
+  :source-class-discovery-only #{:news-report :licensed-commercial-aggregator}
+  :fetch {:respect-robots? true :respect-auth-waf-captcha? true
+          :user-agent "app-public-fund-capital-observation/1.0"}}
+
+ ;; ── Fetch-status admission ─────────────────────────────────────────
+ ;; A receipt whose fetch was not fully :ok backs no entity, event or
+ ;; derived observation. A refused admission produces a refusal record
+ ;; (never silence) and never retro-invalidates earlier observations —
+ ;; a re-fetch appends a new receipt plus a refresh-history entry.
+ :receipt-admission
+ {:rule :fetch-status-ok-required
+  :admit-when #{:ok}
+  :else {:missingness-flag :fetch-status-non-ok
+         :backs-observation? false
+         :refusal-record-required? true
+         :retro-invalidation? false}}
+
+ ;; ── Typed entity/event inputs ──────────────────────────────────────
+ ;; Entity separation is a hard invariant: a fund vehicle, its
+ ;; management company and its general partner are distinct entities
+ ;; even under one brand (brand-is-not-legal-entity). A fund vehicle is
+ ;; not the management company that sponsors it, and a status naming
+ ;; about one is never carried onto the other.
+ :entity-types #{:fund-vehicle :management-company :general-partner
+                 :limited-partner :jurisdiction}
+ :event-types #{:status-named :status-amendment-announced :status-retracted}
+ :entity-record
+ {:schema [:entity-id :entity-type :name :legal-name :jurisdiction
+           :identifier-class :identifier-value :source-receipt-id
+           :asserted-at :observed-at :provenance-chain]
+  :invariant :one-entity-type-per-entity-id
+  :identifier-invariant [:identifier-value-unique-across-entity-types
+                         :one-identifier-per-entity-id]
+  :provenance-chain-required? true
+  :note "A brand string never auto-creates a legal entity."}
+ :event-record
+ {:schema [:event-id :event-type :entity-id :asserted-at :observed-at
+           :stated-status {:kind [:one-of :investing :closed-to-new-investment
+                            :fully-invested :in-wind-down :liquidated
+                            :source-word-unmapped]
+                           :source-word :string   ; the source's own word, verbatim
+                           }
+           :source-receipt-id
+           :provenance-chain]
+  ;; status-kinds-carried-not-collapsed: one source's "closed to new
+  ;; investment" is not another source's "fully invested", and neither
+  ;; is "liquidated". An unmapped source word is carried as
+  ;; :source-word-unmapped together with the verbatim word — never
+  ;; force-fitted into a known kind.
+  :invariants [:status-kinds-carried-not-collapsed
+               :provenance-chain-required-on-every-event
+               :status-is-naming-not-audited-state]}
+
+ ;; ── Status naming is not a state fact ──────────────────────────────
+ ;; The epistemic core of this contract. A status naming is bound to its
+ ;; receipt and its window; outside the window the readback answers
+ ;; :out-of-window — never "still true", never "no longer true".
+ ;; Later status namings append; earlier ones are never overwritten,
+ ;; deleted, or reinterpreted in hindsight.
+ :status-epistemics
+ {:rules [:naming-is-not-audited-or-regulated-state
+          :naming-is-not-performance-or-health-fact
+          :status-outside-window-is-out-of-window-not-false
+          :later-naming-appends-never-overwrites
+          :one-source-naming-plus-another-source-silence-is-not-conflict]}
+
+ ;; ── Cross-source disagreement ──────────────────────────────────────
+ ;; Two allowed sources naming different statuses for the same
+ ;; (fund-vehicle, window) produce a :conflict-observation with ALL
+ ;; competing receipt ids and value :unmeasured. Resolution is always
+ ;; :carry-both-never-resolve — no winner is picked, and a disagreement
+ ;; never hardens into a "current status" claim
+ ;; (disagreement-never-hardens-into-a-status).
+ :status-disagreement
+ {:rule :record-never-resolve
+  :applies-when [:two-or-more-allow-class-receipts :same-entity-id
+                 :same-window :differing-stated-status]
+  :result {:missingness-flag :status-disagreement
+           :provenance-chain :all-conflicting-receipt-ids
+           :value :unmeasured
+           :no-winner-mechanism true
+           :hardening-rule :disagreement-never-hardens-into-a-status}}
+
+ ;; ── Missingness / coverage flags ───────────────────────────────────
+ :missingness
+ {:flags #{:no-receipt :receipt-unparseable :status-not-stated
+           :source-word-unmapped :jurisdiction-unstated
+           :source-language-unmapped
+           :fetch-status-non-ok :identifier-unstated
+           :provenance-chain-incomplete :status-disagreement}
+  :rule :missing-is-unmeasured
+  :coverage-unit [:jurisdiction :source :language :year :stage
+                  :identifier-class]
+  :coverage-record
+  {:schema [:coverage-unit :unit-key :observed-count :unmeasured-count
+            :window :method/version]}}
+
+ ;; ── Derived observation ────────────────────────────────────────────
+ ;; The only derived artifact is an observation of status namings within
+ ;; a window. No ranking, scoring, health, pace, dry-powder, TVPI/DPI or
+ ;; suitability field exists in this shape by construction.
+ :derived-observation
+ {:schema [:observation-id :method/version :window
+           :observation-kind :entity-id :event-id
+           :value {:kind [:one-of :status-naming-in-window
+                    :status-amendment-in-window :status-retraction-in-window]
+                   :basis #{:receipt-only}}
+           :missingness-flags :provenance-chain
+           :asserted-at]
+  :observation-kinds #{:fund-vehicle-status-named-in-window}
+  :forbidden-fields #{:rank :score :centrality :nav :ownership-stake
+                      :suitability :recommendation :current-valuation
+                      :dry-powder :deployment-pace :tvi :tvpi :dpi
+                      :fund-health :actual-status}}
+
+ ;; ── Refresh history ────────────────────────────────────────────────
+ ;; Append-only. A status amendment, retraction, re-fetch or method
+ ;; bump appends a new event plus a history entry; prior observations
+ ;; are never edited or deleted.
+ :refresh-history
+ {:schema [:history-id :observation-id :re-observed-at
+           :reason {:kind [:one-of :window-advanced :source-updated
+                     :status-amendment :status-retraction
+                     :receipt-refetched :method-version-bumped]}
+           :changed-fields]
+  :append-only? true}
+
+ ;; ── Hyakka proposal ────────────────────────────────────────────────
+ ;; What is proposed to Hyakka is a set of auditable QUESTIONS over the
+ ;; observation records, e.g. "how many fund-vehicle status namings of
+ ;; kind K did source S issue in jurisdiction J within window W?" —
+ ;; each question carries its own coverage/missingness statement.
+ :hyakka-proposal
+ {:schema [:proposal-id :question-text :over-observation-kind
+           :window :coverage-record-ref :missingness-flags
+           :disclaimer]
+  :disclaimer
+  "Observations only. Not performance, ownership, endorsement or
+   investment suitability. No investment advice."}
+
+ ;; ── Query / readback shape ─────────────────────────────────────────
+ ;; Deterministic readback: a question id + window returns observations
+ ;; plus the exact coverage statement that bounds them, or an explicit
+ ;; :unmeasured response. Unknown filter keys are rejected
+ ;; (:rejected-filter), never silently ignored, and a :stated-status
+ ;; filter matches the carried kind exactly — an :in-wind-down naming is
+ ;; never returned under a :liquidated filter (kinds never collapse in
+ ;; readback). Unavailable sources answer :unmeasured, not zero.
+ :query-readback
+ {:request-schema [:query-id :observation-kind :window
+                   :filter {:keys #{:jurisdiction :entity-type
+                                    :stated-status}}]
+  :response-schema [:query-id :status
+                    :observations [:observation-id]
+                    :coverage-record-ref
+                    :missingness-flags]
+  :status-values #{:ok :unmeasured :out-of-window :rejected-filter}
+  :rules [:unknown-filter-key-is-rejected-not-ignored
+          :stated-status-filter-matches-carried-kind-exactly
+          :unmeasured-is-not-zero
+          :readback-must-carry-coverage-and-missingness]}}
