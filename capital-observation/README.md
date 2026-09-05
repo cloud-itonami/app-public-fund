@@ -59,7 +59,7 @@ close) and are never collapsed.
 nbb tools/capital_observation_fixtures.cljs
 ```
 
-## LP-commitment observation (`lp-commitment-observation.v1`)
+## LP-commitment observation (`lp-commitment-observation.v2`)
 
 `lp-commitment-observation.edn` is a second bounded contract in this
 directory, observing **stated LP commitments** to funds with provenance.
@@ -89,6 +89,32 @@ nbb tools/lp_commitment_fixtures.cljs
 
 Exit codes: `0` all fixtures ran clean · `1` a violation was found ·
 `2` REFUSED (contract could not be read).
+
+v2 additions (2026-09-02):
+
+- **Provenance on every record**: `:provenance-chain` is required on every
+  event AND every entity record, each citing its own receipt
+  (`:provenance-chain-required-on-every-event` /
+  `:provenance-chain-required-on-every-entity-record`).
+- **Identifier invariants**: one `:identifier-value` never denotes two
+  entity types and one entity id carries exactly one identifier value; a
+  missing identifier is `:identifier-unstated`, never guessed from a
+  brand string.
+- **Receipt disagreement is recorded, never resolved**: two allow-class
+  receipts stating different commitment amounts produce a
+  `:receipt-disagreement` flagged observation carrying ALL conflicting
+  receipt ids with value `:unmeasured` — never an average or a winner.
+- **Fetch-status admission**: a receipt whose fetch was not fully `:ok`
+  backs no observation and flags `:fetch-status-non-ok`.
+- **Discovery-only appears in no chain**: news-report and
+  licensed-commercial-aggregator receipts (`rcpt-l4` in fixtures) appear
+  in NO provenance chain, event, entity or derived observation.
+
+Verify v2 deterministically (offline, no network):
+
+```bash
+nbb tools/lp_commitment_v2_fixtures.cljs
+```
 
 ## Readback pagination (`observation-query-readback.edn`)
 
