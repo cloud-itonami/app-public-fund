@@ -735,3 +735,57 @@ time T, with basis B" — as source-backed claims, proposed to Hyakka as
   Hyakka proposal, and a deterministic readback that always carries
   coverage + missingness.
 nbb tools/valuation_estimate_fixtures.cljs
+
+## Fund-vehicle status observation contract (`fund-vehicle-status-observation.edn`)
+
+`fund-vehicle-status-observation.edn`
+(`fund-vehicle-status-observation.v1`, 2026-09-06) is a bounded actor
+contract for observing **stated fund-vehicle lifecycle status namings** —
+"source S named fund vehicle F as having lifecycle status K (investing /
+closed to new investment / fully invested / in wind-down / liquidated) as
+of time T" — as first-party or registry/securities-filing-backed,
+hash-backed claims, proposed to Hyakka as auditable questions.
+
+- A status naming is the source's own statement about its own vehicle. It
+  is **not** an audited or regulatory determination of state, not a
+  performance, health, pace or dry-powder fact, and not investment
+  suitability (`naming-is-not-audited-or-regulated-state`,
+  `naming-is-not-performance-or-health-fact`).
+- Status kinds are carried as the source's own word and never collapsed
+  (`status-kinds-carried-not-collapsed`): "closed to new investment" is
+  not "fully invested", and neither is "liquidated". An unmapped source
+  word is carried as `:source-word-unmapped` together with the verbatim
+  word — never force-fitted into a known kind.
+- A naming is valid only inside its window; outside it the readback
+  answers `:out-of-window` / `:unmeasured` — never "still true", never
+  "no longer true". A later naming, amendment or retraction appends a new
+  event plus a history entry; earlier namings are never overwritten,
+  deleted or reinterpreted in hindsight
+  (`later-naming-appends-never-overwrites`).
+- Cross-source disagreement: two allowed sources naming different
+  statuses for the same fund vehicle in the same window produce a
+  `:status-disagreement` observation with ALL competing receipt ids and
+  value `:unmeasured` — `:carry-both-never-resolve`, and a disagreement
+  never hardens into a "current status" claim
+  (`disagreement-never-hardens-into-a-status`).
+- Same guarantees as the other contracts: sha256-backed verbatim
+  receipts, explicit fetch-status vocabulary with only `:ok` receipts
+  admitted (a refused admission produces a refusal record, never
+  silence, and never retro-invalidates; a re-fetch appends), required
+  event- and entity-level provenance chains, hard entity separation (a
+  fund vehicle, its management company and its GP stay distinct even
+  under one brand), half-open windows, missingness flags
+  (`missing-is-unmeasured`), append-only refresh history, forbidden
+  fields (`:rank :score :dry-powder :deployment-pace :tvpi :dpi
+  :fund-health :actual-status` and the rest) absent by construction,
+  questions-only Hyakka proposal, and a strict readback (unknown filter
+  keys answer `:rejected-filter`; a `:stated-status` filter matches the
+  carried kind exactly, so an in-wind-down naming is never returned
+  under a liquidated filter; `:unmeasured` is not zero; every response
+  carries coverage + missingness).
+
+Verify deterministically (offline, no network):
+
+```bash
+nbb tools/fund_vehicle_status_fixtures.cljs   # 11 fixtures
+```
