@@ -21,6 +21,29 @@ as auditable questions — never as scores, rankings or advice.
   `pace-is-not-performance`). Deterministic offline fixtures:
   `tools/listing_pace_fixtures.cljs`.
 
+
+v2 additions (2026-09-05):
+
+- **Fetch-status admission**: an input event now carries its receipt's
+  fetch status; only `:ok` receipts may back a pace count. Refused
+  receipts produce a refusal record (never silence) and never appear in
+  a provenance chain; a later re-fetch appends a new receipt plus a
+  refresh-history entry (`:receipt-refetched`) and never edits or
+  invalidates prior rows.
+- **Provenance-chain strictness**: every pace row's chain is the ordered
+  receipt ids of its cited events — non-empty, subset of receipt ids,
+  first element = first cited event's receipt; conflicted events keep
+  all competing receipts (`:provenance-chain-is-required-and-verified`).
+- **Readback strictness**: unknown filter keys are rejected
+  (`:rejected-filter`), never silently ignored; an `:event-kind` filter
+  matches the carried kind exactly, so a removal is never returned under
+  a listing filter; `:admission-refused` is a first-class status.
+
+Verify v2 deterministically (offline, no network):
+
+```bash
+nbb tools/listing_pace_v2_fixtures.cljs
+```
 ## fund-close-observation.edn
 
 - A machine-readable contract covering source receipts (sha256 of verbatim
