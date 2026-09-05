@@ -4,6 +4,23 @@ Bounded actor contracts in this directory observe public capital-market
 surface with provenance, and propose results to `network-awai/app-hyakka`
 as auditable questions — never as scores, rankings or advice.
 
+## listing-pace-observation.edn
+
+- Compositional v1 contract (2026-09-03) that re-counts events already
+  admitted by `portfolio-listing-observation.v1.1+` per fund vehicle per
+  window, with one added dimension: whether the listing event carried a
+  receipt-stated date. Emits per (fund-vehicle, window, event-kind) rows
+  of `dated-count` / `undated-count` / `conflict-count` — counts are sums
+  over cited events, undated events are never dropped or back-dated and
+  never added to the dated count, and zero-event windows are rows (0, 0)
+  with a `:no-events-in-window-from-measured-sources` flag, not silence.
+  Carry-both conflicts ride the provenance chain; no winner is picked.
+  Structurally excludes rank/score/velocity/momentum/valuation fields —
+  a pace count is not activity, momentum or performance
+  (`listing-pace-is-not-activity`, `undated-is-not-quiet`,
+  `pace-is-not-performance`). Deterministic offline fixtures:
+  `tools/listing_pace_fixtures.cljs`.
+
 ## fund-close-observation.edn
 
 - A machine-readable contract covering source receipts (sha256 of verbatim
