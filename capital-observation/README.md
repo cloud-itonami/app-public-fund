@@ -595,3 +595,32 @@ actor contract for
   `:provider-role` filter matches the carried role exactly, so an
   `:unstated` role is never returned under a specific-role filter.
 nbb tools/fund_service_provider_fixtures.cljs   # 18 fixtures (v2)
+(`coverage-rollup-observation.v1`) is a compositional contract that
+## Startup status observation contract (`startup-observation.edn`)
+`startup-observation.edn` (`startup-observation.v1`) is a bounded actor
+contract for observing **startup-status namings** — "source S named
+company C as a startup (or as a former startup) at time T" — as
+registry- or first-party-backed, hash-backed claims, proposed to Hyakka
+- `startup-is-a-time-bounded-observation-not-a-permanent-class`: an
+  observation is valid **only inside its window**; outside it the
+  readback answers `:out-of-window` — never "still true", never "no
+  longer true". A later classification change (e.g. the registry naming
+  the company as acquired) is a NEW event plus an append-only history
+  entry; the earlier naming is never overwritten, deleted, or
+  reinterpreted as "false" in hindsight.
+- A named stage is the source's own word bound to a receipt — **not** a
+  verified stage, not performance, momentum or success
+  (`named-stage-is-not-a-verified-stage`,
+  `former-status-is-not-a-performance-or-success-fact`). Two allowed
+  sources naming different stages are both carried; no "true stage" is
+  ever merged.
+- Only allowed sources (company/registry first-party classes) may back a
+  derived observation; news reports are discovery-only. Same guarantees
+  as the other contracts: sha256-backed verbatim receipts, hard entity
+  separation (a company, a fund vehicle and a management company sharing
+  a brand stay distinct), half-open time-bounded windows, missingness
+  flags (`missing-is-unmeasured`, `:stage-unstated`), no
+  rank/score/success-likelihood/growth-rate/valuation/returns/ownership/
+  suitability fields by construction, questions-only Hyakka proposal,
+  and a deterministic readback that always carries coverage +
+nbb tools/startup_observation_fixtures.cljs
