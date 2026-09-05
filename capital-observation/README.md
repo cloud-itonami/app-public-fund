@@ -483,7 +483,7 @@ hash-backed claims, proposed to Hyakka as auditable questions.
 ## Fund service-provider observation contract (`fund-service-provider-observation.edn`)
 
 `fund-service-provider-observation.edn`
-(`fund-service-provider-observation.v1`) is a bounded actor contract for
+(`fund-service-provider-observation.v2`; v1 was 2026-09-04) is a bounded actor contract for
 observing **fund service-provider namings** — "source S named provider P
 in role R for fund vehicle F at time T" (auditor, administrator,
 custodian, transfer agent, placement agent) — as first-party or
@@ -518,11 +518,25 @@ auditable questions.
   winner is picked, and a conflict never resolves into a
   verified-engagement claim. One source's naming plus another source's
   silence is not a conflict — silence is unmeasured.
+- **v2 hardening** (`fund-service-provider-observation.v2`, 2026-09-05):
+  an explicit fetch-status vocabulary (`:ok :error :redirected
+  :not-modified :robots-disallowed :auth-required`) with only `:ok`
+  receipts admitted — a refused admission produces a refusal record,
+  never silence, and never retro-invalidates derived namings (a
+  re-fetch appends). Every event requires a verifiable
+  `:provenance-chain` (non-empty, all ids exist, last element =
+  `:source-receipt-id`) and the derived naming carries its event's
+  chain **exactly** — invented/trimmed/re-headed chains are refused
+  (`:provenance-chain-invalid`). Readback is strict: an unknown filter
+  key answers `:rejected-filter` instead of being ignored, and a
+  `:provider-role` (or `:listing-kind`) filter matches the carried
+  value exactly, so an `:unstated` role is never returned under a
+  specific-role filter.
 
 Verify deterministically (offline, no network):
 
 ```bash
-nbb tools/fund_service_provider_fixtures.cljs
+nbb tools/fund_service_provider_fixtures.cljs   # 17 fixtures (v2)
 ```
 
 ## Source receipt refresh observation contract (`source-receipt-refresh-observation.edn`)

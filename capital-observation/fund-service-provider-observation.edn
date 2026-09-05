@@ -32,13 +32,36 @@
 ;;                                       — a news report naming a
 ;;     provider is discovery-only and can never back the naming.
 ;;
-;; Method version: v1 (2026-09-04). Any change to field semantics bumps
+;; Method version: v2 (2026-09-05). Any change to field semantics bumps
 ;; :method/version and appends a :refresh/history entry; old observations
 ;; are never silently reinterpreted.
+;;
+;; v2 hardening (v1 -> v2, no prior semantics silently changed):
+;; 1. Fetch-status ADMISSION GATE — a receipt carries an explicit fetch
+;;    status (:ok, :error, :redirected, :not-modified, :robots-disallowed,
+;;    :auth-required). Only :ok receipts are admitted to back a derived
+;;    naming observation; every other status is recorded verbatim but
+;;    produces a REFUSAL RECORD (:admission-refused — never silence) and
+;;    never retro-invalidates already-derived observations. A re-fetch
+;;    appends a new receipt + refresh-history entry, it never edits.
+;;    (v1 admitted only :ok but declared no refusal RECORD and no
+;;    vocabulary for non-ok statuses — v2 makes both explicit.)
+;; 2. Event-level provenance chains — every event requires an ordered,
+;;    receipt-exact :provenance-chain (non-empty, all ids exist,
+;;    head/last = its :source-receipt-id). A derived naming observation
+;;    carries its event's chain EXACTLY; inventing, trimming or
+;;    re-heading a chain is a violation (:provenance-chain-invalid),
+;;    refused — never derived.
+;; 3. Strict readback hardening — an unknown filter key answers
+;;    :rejected-filter instead of being silently ignored; a
+;;    :provider-role filter matches the carried role exactly, so an
+;;    :unstated role is never returned under a specific-role filter
+;;    (roles never collapse in readback), and a :listing-kind filter
+;;    likewise matches the carried kind exactly.
 
 {:contract/id :fund-service-provider-observation
- :contract/version "1.0.0"
- :method/version "fund-service-provider-observation.v1"
+ :contract/version "2.0.0"
+ :method/version "fund-service-provider-observation.v2"
  :actor :cloud-itonami/app-public-fund
  :proposes-to :network-awai/app-hyakka
 
@@ -63,6 +86,18 @@
  {:schema [:receipt-id :source-url :source-class :source-language
            :observed-at :content-hash :fetch-status]
   :content-hash {:algo "sha256" :of "response-body-bytes"}
+  ;; v2: explicit fetch-status vocabulary. Only :ok is admitted; every
+  ;; other status is recorded verbatim and refuses admission.
+  :fetch-status-values #{:ok :error :redirected :not-modified
+                         :robots-disallowed :auth-required}
+  :admission {:admitted #{:ok}
+              :refusal-record {:schema [:receipt-id :fetch-status
+                                        :admission-refused-at
+                                        :method/version]}
+              :rule :admission-refused-receipt-backs-no-observation
+              ;; already-derived namings are not retro-actively
+              ;; invalidated; a re-fetch appends, never edits.
+              :re-fetch-rule :re-fetch-appends-new-receipt-plus-history}
   :source-class-allow #{:official-regulator :official-company-registry
                         :official-securities-filing
                         :official-stock-exchange-filing
@@ -77,7 +112,7 @@
   :source-class-discovery-only #{:news-report :licensed-commercial-aggregator
                                  :provider-first-party-directory}
   :fetch {:respect-robots? true :respect-auth-waf-captcha? true
-          :user-agent "app-public-fund-fund-service-provider-observation/1.0"}}
+          :user-agent "app-public-fund-fund-service-provider-observation/2.0"}}
 
  ;; ── Typed entity/event inputs ──────────────────────────────────────
  ;; Entity separation is a hard invariant: the fund vehicle, its
@@ -110,7 +145,7 @@
                             :stated-in-fund-document]}
            :as-stated-by-source? true
            :source-receipt-id
-           :provenance-chain]              ; receipt ids, verbatim order
+           :provenance-chain]              ; v2: required, event-level
   ;; Roles are carried as the source's own words. A role naming is not
   ;; a verified engagement, not a fee/compensation fact, not an
   ;; endorsement, and never a diligence opinion about either party.
@@ -120,9 +155,18 @@
   :invariants [:provider-id-resolves-to-declared-entity
                :fund-vehicle-id-resolves-to-declared-entity
                :provenance-chain-required-on-every-event
+               :provenance-chain-is-required-and-verified
                :role-is-carried-not-collapsed
                :naming-is-not-verified-engagement
-               :naming-is-not-fee-or-revenue-fact]}
+               :naming-is-not-fee-or-revenue-fact]
+  ;; v2: the chain is ordered receipt ids — all existing, non-empty,
+  ;; last element = :source-receipt-id. A derived naming observation
+  ;; carries exactly its event's chain; inventing, trimming or
+  ;; re-heading receipts is a violation (:provenance-chain-invalid).
+  :provenance-chain-rule
+  {:non-empty? true :subset-of-receipt-ids? true
+   :last-element-is-source-receipt-id? true
+   :observation-carries-event-chain-exactly? true}}
 
  ;; ── Receipt admission ──────────────────────────────────────────────
  ;; A receipt whose fetch did not fully succeed backs no derived
@@ -132,6 +176,12 @@
  :receipt-admission
  {:rule :fetch-status-ok-required
   :admit-when #{:ok}
+  ;; v2: the refusal is a RECORD (never silence), and it never
+  ;; retro-invalidates an already-derived naming — a re-fetch appends
+  ;; a new receipt plus a refresh-history entry, it never edits.
+  :refusal-record {:schema [:receipt-id :fetch-status :admission-refused-at
+                            :method/version]}
+  :re-fetch-rule :re-fetch-appends-new-receipt-plus-history
   :else {:missingness-flag :fetch-status-non-ok :backs-observation? false}}
 
  ;; ── Derived observation ────────────────────────────────────────────
@@ -235,8 +285,21 @@
            :provenance-chain]
   :request-schema [:query-id :observation-kind :window
                    :filter {:keys #{:jurisdiction :provider-role
+                                    :listing-kind
                                     :fund-vehicle-entity-id
                                     :provider-entity-id}}]
-  :status-values #{:ok :unmeasured :out-of-window :rejected-filter}
+  :status-values #{:ok :unmeasured :out-of-window :rejected-filter
+                   :admission-refused}
   :window-scoping :out-of-window-outside-window
+  ;; v2: unknown filter keys are rejected, never silently ignored; a
+  ;; :provider-role filter never returns an observation whose carried
+  ;; role differs (an :unstated role is never returned under a
+  ;; specific-role filter) and a :listing-kind filter never returns a
+  ;; naming whose carried kind differs — roles and kinds never collapse
+  ;; in readback.
+  :strictness {:rule :unknown-filter-key-rejected-not-ignored
+               :provider-role-filter-rule
+               :filter-matches-carried-role-exactly
+               :listing-kind-filter-rule
+               :filter-matches-carried-kind-exactly}
   :rule :readback-always-carries-coverage-and-missingness}}
