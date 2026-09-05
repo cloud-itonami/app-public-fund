@@ -670,3 +670,38 @@ Hyakka as auditable questions.
   (`extension-appends-does-not-overwrite`).
   rank/score/returns/TVPI/DPI/deployment-pace/dry-powder/fund-health/
 nbb tools/fund_term_vintage_fixtures.cljs
+## Valuation estimate observation contract (`valuation-estimate-observation.edn`)
+`valuation-estimate-observation.edn` is a bounded actor contract for
+observing **publicly stated valuation estimates and valuation claims** —
+"source S stated an estimated/claimed valuation V for company C as of
+time T, with basis B" — as source-backed claims, proposed to Hyakka as
+- An estimated valuation is an **opinion artifact**: it is not a
+  verified valuation, a transaction price, NAV, ownership, a return, a
+  momentum signal or investment suitability
+  (`estimated-valuation-is-not-verified-valuation`; `verified-valuation`,
+  `nav`, `implied-markup`, `round-step-up`, `revenue-multiple` and
+  `reconciled-valuation` are structurally forbidden fields). The
+  contract never computes markups, step-ups, multiples or implied
+  returns across rounds.
+- Amount, currency, **basis** (`post-money-claim` / `pre-money-claim` /
+  `mark-to-model-estimate` / `stated-basis-unspecified`) and **as-of**
+  date are carried verbatim and never collapsed
+  (`estimate-basis-and-currency-carried-not-collapsed`); a re-published
+  number without its own stated basis is
+  `:estimate-basis-unstated`, i.e. unmeasured here.
+- Allowed sources: company first-party, official registry filings, and
+  licensed commercial aggregators **only for their own explicitly
+  labelled estimates**. News reports are discovery-only.
+- **Cross-source conflict**: two allowed sources stating different
+  estimates for the same company are carried as a
+  `:conflict-observation` with both receipts and both stated values —
+  `:carry-both-never-resolve`, never averaged, never reconciled
+  (`no-averaging-of-competing-estimates`).
+  receipts, hard entity separation (company, financing round and
+  estimating source stay distinct even when they share a brand),
+  half-open windows, missingness flags (`missing-is-unmeasured`),
+  append-only refresh history (a revision or retraction appends, never
+  overwrites), no rank/score fields by construction, questions-only
+  Hyakka proposal, and a deterministic readback that always carries
+  coverage + missingness.
+nbb tools/valuation_estimate_fixtures.cljs
