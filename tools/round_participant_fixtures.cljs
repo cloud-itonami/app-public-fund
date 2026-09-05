@@ -1,7 +1,10 @@
 ;; round_participant_fixtures.cljs — deterministic offline fixture
-;; runner for the round-participant-observation.v1 contract.
+;; runner for the round-participant-observation.v2 contract.
 ;; No network. Exit 0 = clean, 1 = violation found, 2 = contract
 ;; unreadable.
+;;
+;; v2 (2026-09-02): adds fixtures for fetch-status admission (a non-ok
+;; receipt backs nothing) and event-level provenance chains.
 ;;
 ;; Run: nbb tools/round_participant_fixtures.cljs
 
@@ -47,7 +50,16 @@
     :source-class :participant-first-party :source-language "en"
     :observed-at "2026-02-02T00:00:00Z"
     :content-hash (sha256-hex "investor page bytes v1")
-    :fetch-status 200}])
+    :fetch-status 200}
+   ;; v2 fixture: a fetch that was NOT fully ok — backs nothing.
+   {:receipt-id "rcpt-r3"
+    :source-url "https://company.example/round-1?mirror"
+    :source-class :company-first-party :source-language "en"
+    :observed-at "2026-02-03T00:00:00Z"
+    :content-hash (sha256-hex "partial company round page bytes")
+    :fetch-status 503}])
+
+(def rcpt-ids (set (map :receipt-id fixture-receipts)))
 
 (def fixture-entities
   [{:entity-id "round-1" :entity-type :financing-round
@@ -77,16 +89,16 @@
     :financing-round-entity-id "round-1" :participant-entity-id "inv-1"
     :role {:kind :lead-participant :as-stated-by-source? true}
     :observed-at "2026-02-01T00:00:00Z" :asserted-at "2026-01-20"
-    :source-receipt-id "rcpt-r1"}
+    :source-receipt-id "rcpt-r1" :provenance-chain ["rcpt-r1"]}
    {:event-id "evt-r2" :event-type :participant-role-stated
     :financing-round-entity-id "round-1" :participant-entity-id "inv-2"
     :role {:kind :participant :as-stated-by-source? true}
     :observed-at "2026-02-02T00:00:00Z" :asserted-at "2026-01-20"
-    :source-receipt-id "rcpt-r2"}])
+    :source-receipt-id "rcpt-r2" :provenance-chain ["rcpt-r2"]}])
 
 (def fixture-derived
   [{:observation-id "obs-r1"
-    :method/version "round-participant-observation.v1"
+    :method/version "round-participant-observation.v2"
     :window fixture-window
     :observation-kind :participant-named-in-window
     :financing-round-entity-id "round-1" :participant-entity-id "inv-1"
@@ -95,7 +107,7 @@
     :missingness-flags #{} :provenance-chain ["rcpt-r1"]
     :asserted-at "2026-01-20"}
    {:observation-id "obs-r2"
-    :method/version "round-participant-observation.v1"
+    :method/version "round-participant-observation.v2"
     :window fixture-window
     :observation-kind :participant-role-stated-in-window
     :financing-round-entity-id "round-1" :participant-entity-id "inv-2"
@@ -107,7 +119,7 @@
 (def fixture-coverage
   {:coverage-unit :jurisdiction :unit-key :delaware :observed-count 1
    :unmeasured-count 0 :window fixture-window
-   :method/version "round-participant-observation.v1"})
+   :method/version "round-participant-observation.v2"})
 
 (def fixture-conflict
   {:conflict-id "conflict-r1" :window fixture-window
@@ -263,15 +275,44 @@
 (defn fixture-method-version [ctx]
   (chk ctx "method version pinned"
        (str/starts-with? (:method/version contract)
-                         "round-participant-observation.v1"))
+                         "round-participant-observation.v2"))
   (doseq [o fixture-derived]
     (chk ctx (str (:observation-id o) " pins the method version")
          (= (:method/version contract) (:method/version o)))))
+
+(defn fixture-fetch-status-admission [ctx]
+  ;; v2: a receipt whose fetch was not fully :ok backs no observation.
+  (let [ok-values #{:ok 200}
+        sr (:source-receipt contract)
+        admission (get-in contract [:source-receipt :fetch-admission])]
+    (chk ctx "contract pins fetch-status admission"
+         (= :fetch-status-must-be-ok (:rule admission)))
+    (chk ctx "non-ok receipt rcpt-r3 is never ok"
+         (not (contains? ok-values (:fetch-status
+                                   (first (filter #(= "rcpt-r3" (:receipt-id %))
+                                                  fixture-receipts))))))
+    (chk ctx "admission records non-ok receipts, never drops them"
+         (contains? (:invariant admission) :non-ok-receipt-is-recorded-never-dropped))))
+
+(defn fixture-event-provenance [ctx]
+  ;; v2: every event carries a non-empty provenance chain of receipt ids.
+  (chk ctx "event-record schema carries :provenance-chain"
+       (contains? (set (get-in contract [:event-record :schema])) :provenance-chain))
+  (chk ctx "event-record invariant provenance-chain-required-on-every-event"
+       (contains? (get-in contract [:event-record :invariants])
+                  :provenance-chain-required-on-every-event))
+  (doseq [e fixture-events]
+    (chk ctx (str (:event-id e) " provenance chain non-empty")
+         (seq (:provenance-chain e)))
+    (chk ctx (str (:event-id e) " provenance chains to its cited receipt")
+         (contains? rcpt-ids (:source-receipt-id e)))))
 
 (def fixtures
   {"window-bounds" fixture-window
    "provenance" fixture-provenance
    "source-classes" fixture-source-classes
+   "fetch-status-admission" fixture-fetch-status-admission
+   "event-provenance" fixture-event-provenance
    "entity-separation" fixture-entity-separation
    "roles-carried-not-collapsed" fixture-roles-carried
    "not-ownership-or-graph" fixture-not-ownership-or-graph
