@@ -578,3 +578,20 @@ Verify deterministically (offline, no network):
 ```bash
 nbb tools/regulator_registration_fixtures.cljs
 ```
+## LP-commitment observation (`lp-commitment-observation.v1`)
+(`fund-service-provider-observation.v2`; v1 was 2026-09-04) is a bounded
+actor contract for
+- **v2 hardening** (`fund-service-provider-observation.v2`, 2026-09-05):
+  an explicit fetch-status vocabulary (`:ok :error :redirected
+  :not-modified :robots-disallowed :auth-required`) with only `:ok`
+  receipts admitted — a refused admission produces a refusal record,
+  never silence, and never retro-invalidates derived observations (a
+  re-fetch appends). Every event requires a verifiable
+  `:provenance-chain` (non-empty, all ids exist, head =
+  `:source-receipt-id`) and the derived observation carries its event's
+  chain **exactly** — invented/trimmed/re-headed chains are refused
+  (`:provenance-chain-invalid`). Readback is strict: an unknown filter
+  key answers `:rejected-filter` instead of being ignored, and a
+  `:provider-role` filter matches the carried role exactly, so an
+  `:unstated` role is never returned under a specific-role filter.
+nbb tools/fund_service_provider_fixtures.cljs   # 18 fixtures (v2)
