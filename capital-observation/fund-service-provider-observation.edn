@@ -1,0 +1,242 @@
+;; fund-service-provider-observation.edn — bounded actor contract for
+;; observing PUBLIC fund service-provider namings: "source S named
+;; provider P in role R for fund vehicle F at time T" (e.g. auditor,
+;; administrator, custodian, transfer agent, placement agent),
+;; proposed to Hyakka (network-awai/app-hyakka) as auditable questions,
+;; not as a score.
+;;
+;; Scope guard: this contract observes NAMING CLAIMS made by allowed
+;; sources about fund service-provider roles. It does NOT rank providers,
+;; funds, GPs, managers or LPs, does not infer engagement quality, fee
+;; arrangements, revenue, ownership, control, endorsements or
+;; suitability, and produces no investment advice. A naming is exactly
+;; the source's own statement at a time; it is not a verified
+;; engagement, not a current engagement, and never a diligence opinion
+;; about either party. Every derived observation traces back to a source
+;; receipt by hash.
+;;
+;; Epistemic boundaries honored here (capital-scope.edn):
+;;   :brand-is-not-legal-entity          — a provider brand never
+;;     auto-creates the engaged legal entity; a fund brand never
+;;     auto-creates the fund vehicle.
+;;   :venture-firm-is-not-fund-vehicle   — the management company and
+;;     the fund vehicle it manages are distinct entities; a naming
+;;     scoped to one never silently scopes to the other.
+;;   :gp-is-not-management-company-without-source
+;;   :portfolio-page-is-an-observed-claim-not-a-current-holding
+;;                                       — by analogy: a today-visible
+;;     naming is an observed claim, not a timeless engagement fact.
+;;   :missing-is-unmeasured              — no receipt in a window means
+;;     "not measured", never "no provider was engaged".
+;;   :news-report-is-not-an-issuer-or-regulator-filing
+;;                                       — a news report naming a
+;;     provider is discovery-only and can never back the naming.
+;;
+;; Method version: v1 (2026-09-04). Any change to field semantics bumps
+;; :method/version and appends a :refresh/history entry; old observations
+;; are never silently reinterpreted.
+
+{:contract/id :fund-service-provider-observation
+ :contract/version "1.0.0"
+ :method/version "fund-service-provider-observation.v1"
+ :actor :cloud-itonami/app-public-fund
+ :proposes-to :network-awai/app-hyakka
+
+ ;; ── Measurement window ─────────────────────────────────────────────
+ ;; Half-open [from, until) in UTC ISO-8601 dates. "missing" inside a
+ ;; window means "not measured in this window", never "no provider was
+ ;; engaged" and never "the engagement ended".
+ :window
+ {:schema [:from :until :declared-at :timezone]
+  :format "YYYY-MM-DD"
+  :closed? false                       ; [from, until)
+  :rule :window-must-not-overlap-within-same-source-and-method}
+
+ ;; ── Source receipts ────────────────────────────────────────────────
+ ;; Every observation cites exactly one receipt, captured verbatim
+ ;; (bytes hash + fetch metadata) before any parsing. Only first-party
+ ;; (fund / manager / provider's own professional-engagement disclosure)
+ ;; and official regulator / registry / filing sources may back a
+ ;; derived observation here. A news report or a scraped "service
+ ;; provider directory" is discovery-only and can never back the naming.
+ :source-receipt
+ {:schema [:receipt-id :source-url :source-class :source-language
+           :observed-at :content-hash :fetch-status]
+  :content-hash {:algo "sha256" :of "response-body-bytes"}
+  :source-class-allow #{:official-regulator :official-company-registry
+                        :official-securities-filing
+                        :official-stock-exchange-filing
+                        :official-board-record :fund-first-party
+                        :manager-first-party}
+  :source-class-forbid #{:search-snippet :generated-summary :scraped-directory
+                         :social-post :broker-list :paywall-bypass
+                         :captcha-bypass}
+  ;; discovery-only pointers can never back a derived observation. A
+  ;; news report ("X hired Y as auditor") is a pointer to look for an
+  ;; official or first-party receipt, never the evidence itself.
+  :source-class-discovery-only #{:news-report :licensed-commercial-aggregator
+                                 :provider-first-party-directory}
+  :fetch {:respect-robots? true :respect-auth-waf-captcha? true
+          :user-agent "app-public-fund-fund-service-provider-observation/1.0"}}
+
+ ;; ── Typed entity/event inputs ──────────────────────────────────────
+ ;; Entity separation is a hard invariant: the fund vehicle, its
+ ;; management company, its general partner and the provider entity are
+ ;; distinct entities even when they share a brand string
+ ;; (brand-is-not-legal-entity). Each naming binds exactly one provider
+ ;; entity id, one fund-vehicle entity id and one role — never a name
+ ;; string.
+ :entity-types #{:fund-vehicle :management-company :general-partner
+                 :service-provider :jurisdiction}
+ :event-types #{:provider-named :provider-naming-retracted}
+ :entity-record
+ {:schema [:entity-id :entity-type :name :legal-name :jurisdiction
+           :identifier-class :identifier-value :source-receipt-id
+           :asserted-at :observed-at]
+  ;; identifier-class restricted to official registry identifiers.
+  ;; LEI may appear only as stated by a regulator or registry receipt.
+  :identifier-class-allow #{:crd :iard :company-registration-number
+                            :official-registry-id :lei}
+  :invariant :one-entity-type-per-entity-id
+  :identifier-invariant [:identifier-value-unique-across-entity-types
+                         :one-identifier-per-entity-id]
+  :note "A brand string never auto-creates a legal entity."}
+ :event-record
+ {:schema [:event-id :event-type :fund-vehicle-entity-id
+           :provider-entity-id :provider-role
+           :announced-at :asserted-at
+           :listing-kind {:kind [:one-of :stated-in-audit-report
+                            :stated-in-regulatory-filing
+                            :stated-in-fund-document]}
+           :as-stated-by-source? true
+           :source-receipt-id
+           :provenance-chain]              ; receipt ids, verbatim order
+  ;; Roles are carried as the source's own words. A role naming is not
+  ;; a verified engagement, not a fee/compensation fact, not an
+  ;; endorsement, and never a diligence opinion about either party.
+  :provider-role-allow #{:auditor :administrator :custodian
+                         :transfer-agent :placement-agent
+                         :unstated}
+  :invariants [:provider-id-resolves-to-declared-entity
+               :fund-vehicle-id-resolves-to-declared-entity
+               :provenance-chain-required-on-every-event
+               :role-is-carried-not-collapsed
+               :naming-is-not-verified-engagement
+               :naming-is-not-fee-or-revenue-fact]}
+
+ ;; ── Receipt admission ──────────────────────────────────────────────
+ ;; A receipt whose fetch did not fully succeed backs no derived
+ ;; observation and flags :fetch-status-non-ok. It is still recorded
+ ;; (missing-is-unmeasured), and a re-fetch appends a new receipt plus a
+ ;; history entry rather than retro-invalidating derived observations.
+ :receipt-admission
+ {:rule :fetch-status-ok-required
+  :admit-when #{:ok}
+  :else {:missingness-flag :fetch-status-non-ok :backs-observation? false}}
+
+ ;; ── Derived observation ────────────────────────────────────────────
+ ;; The only derived artifact is an observation of a provider naming
+ ;; within a window. No ranking, scoring, engagement-verification,
+ ;; fee/revenue field, endorsement, suitability or personal field exists
+ ;; in this shape by construction.
+ :derived-observation
+ {:schema [:observation-id :method/version :window
+           :observation-kind :fund-vehicle-entity-id
+           :provider-entity-id :provider-role
+           :value {:kind [:one-of :naming-count :naming-observation]
+                   :basis #{:receipt-only}}
+           :missingness-flags :provenance-chain
+           :asserted-at]
+  :observation-kinds #{:provider-named-in-window
+                       :provider-naming-retracted-in-window}
+  ;; Forbidden by construction: any field that would rank, score,
+  ;; verify an engagement or characterize either party.
+  :forbidden-fields #{:rank :score :centrality :engagement-verified
+                      :fee-arrangement :revenue :aum :returns :irr :moic
+                      :ownership-stake :control :endorsement
+                      :suitability :recommendation :diligence-opinion
+                      :performance-history :personal-wealth}}
+
+ ;; ── Missingness / coverage flags ───────────────────────────────────
+ :missingness
+ {:flags #{:no-receipt :receipt-unparseable :provider-unstated
+           :provider-not-resolvable-to-entity :role-unstated
+           :fund-vehicle-unstated :fund-vehicle-not-resolvable-to-entity
+           :fetch-status-non-ok :identifier-unstated
+           :provenance-chain-incomplete :source-language-unmapped}
+  :rule :missing-is-unmeasured
+  :note "\"missing\" means not measured in this window; it never means
+         \"no provider was engaged\" or \"the engagement ended\"."}
+ :coverage
+ {:schema [:window :expected-observations :observed-count
+           :coverage-ratio :covered-fund-vehicles
+           :unstated-role-events :coverage-flags]
+  :rule :coverage-is-reported-never-assumed}
+
+ ;; ── Cross-source conflict ──────────────────────────────────────────
+ ;; When two allowed sources disagree about the same (fund-vehicle,
+ ;; provider, role) naming in the same window, the disagreement itself
+ ;; is carried as a :conflict-observation with both receipts
+ ;; (:competing-source-receipt-ids). Resolution is always
+ ;; :carry-both-never-resolve — no winner is picked, the pair is flagged
+ ;; :first-party-source-conflict wherever it appears downstream, and a
+ ;; conflict never resolves into a verified-engagement claim. One
+ ;; source's naming plus another source's silence is NOT a conflict —
+ ;; silence is :missing-is-unmeasured.
+ :conflict
+ {:rule :carry-both-never-resolve
+  :no-winner-mechanism true
+  :conflict-record {:schema [:conflict-id :fund-vehicle-entity-id
+                      :provider-entity-id :provider-role :window
+                      :competing-source-receipt-ids
+                      :missingness-flags]}
+  :invariant :disagreement-never-hardens-into-a-naming}
+
+ ;; ── Refresh history ────────────────────────────────────────────────
+ ;; Append-only. Re-observation is a new receipt + a new history entry;
+ ;; an earlier observation is never deleted, overwritten or
+ ;; reinterpreted. A naming later observed as retracted is a NEW
+ ;; observation plus a history entry — the original naming record is
+ ;; never edited or deleted.
+ :refresh/history
+ {:schema [:entry-id :at :method-version :change-summary
+           :source-receipt-id]
+  :append-only? true
+  :rule :append-only-never-rewrite
+  :retraction-rule :reclassification-appends-does-not-overwrite}
+
+ ;; ── Hyakka proposal (questions only) ───────────────────────────────
+ ;; The contract proposes auditable QUESTIONS. It never states answers
+ ;; as fact, never recommends, never scores.
+ :proposal
+ {:to :network-awai/app-hyakka
+  :kind :auditable-question
+  :example-questions
+  ["Which service-provider entities does source S name, in which roles,
+    for fund vehicle F inside window W?"
+   "For how many fund vehicles in window W does source S state any
+    provider role at all?"
+   "How many naming events in window W carry an :unstated role, and
+    which coverage units do they fall in?"]
+  :never #{:investment-advice :ranking :score :suitability
+           :outreach :solicitation :fundraising :allocation
+           :personal-profiling}}
+
+ ;; ── Query / readback shape ─────────────────────────────────────────
+ ;; Deterministic readback: every answer carries its window, coverage
+ ;; and missingness. Outside the window the readback answers
+ ;; :out-of-window — never "still engaged", never "no longer engaged".
+ ;; Unknown request keys are rejected, not ignored; a :provider-role
+ ;; filter matches the carried role exactly (an :unstated role is never
+ ;; returned under a specific-role filter).
+ :query-readback
+ {:schema [:question-id :observation-kind :window :observed-at
+           :coverage :missingness-flags :method-version
+           :provenance-chain]
+  :request-schema [:query-id :observation-kind :window
+                   :filter {:keys #{:jurisdiction :provider-role
+                                    :fund-vehicle-entity-id
+                                    :provider-entity-id}}]
+  :status-values #{:ok :unmeasured :out-of-window :rejected-filter}
+  :window-scoping :out-of-window-outside-window
+  :rule :readback-always-carries-coverage-and-missingness}}
