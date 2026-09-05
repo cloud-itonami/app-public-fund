@@ -624,3 +624,30 @@ registry- or first-party-backed, hash-backed claims, proposed to Hyakka
   suitability fields by construction, questions-only Hyakka proposal,
   and a deterministic readback that always carries coverage +
 nbb tools/startup_observation_fixtures.cljs
+## Fund investment focus observation contract (`fund-investment-focus-observation.edn`)
+`fund-investment-focus-observation.edn` is a bounded actor contract for
+observing **stated fund investment focus** — "source S stated that fund
+vehicle F targets focus dimension K (sector / geography / stage) with
+value V as of time T" — as first-party or registry/securities-filing-backed,
+- A stated focus is the source's own statement of intent. It is **not**
+  an actual allocation or deployment, a portfolio composition record, a
+  performance measure, an endorsement or a suitability signal
+  (`stated-focus-is-not-actual-allocation`).
+- Focus dimensions are carried separately and are never collapsed
+  (`focus-dimensions-carried-not-collapsed`): a stated sector is not a
+  stated geography, a stated geography is not a stated stage, and a
+  stated stage is not an actual check size.
+- A focus-change announcement is an **amendment**: a new
+  `:focus-change-announced` observation plus a history entry. The
+  earlier stated focus value is never overwritten or deleted
+  (`focus-change-appends-does-not-overwrite`).
+- Only first-party sources (fund / manager / official registry /
+  securities filings) may back a derived observation; news reports are
+  discovery-only. Same guarantees as the other contracts: sha256-backed
+  verbatim receipts, hard entity separation (fund vehicle, management
+  company and GP stay distinct even when they share a brand), half-open
+  time-bounded windows, missingness flags (`missing-is-unmeasured`),
+  cross-source conflict carried as `:conflict-observation` with
+  `:carry-both-never-resolve`, append-only refresh history, no
+  rank/score/allocation/portfolio-composition/returns/health/
+nbb tools/fund_investment_focus_fixtures.cljs
