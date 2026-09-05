@@ -22,14 +22,35 @@
 ;; companies, GPs or LPs, does not infer ownership stakes or returns,
 ;; and produces no investment advice.
 ;;
-;; Method version: listing-pace-observation.v1 (2026-09-03). Any change
-;; to field semantics bumps :method/version and appends a
-;; :refresh/history entry; old observations are never silently
-;; reinterpreted.
+;; Method version: v2 (2026-09-05). Any change to field semantics bumps
+;; :method/version and appends a :refresh/history entry; old observations
+;; are never silently reinterpreted.
+;;
+;; v2 hardening (v1 -> v2, no prior semantics silently changed):
+;; 1. Fetch-status ADMISSION — a receipt carries an explicit fetch status
+;;    (:ok, :error, :redirected, :not-modified, :robots-disallowed,
+;;    :auth-required). Only :ok receipts are ADMITTED to back a pace
+;;    count; every other status is recorded verbatim but refuses
+;;    admission (:admission-refused-receipt-backs-no-observation) and
+;;    produces a refusal record, never silence. An event whose receipt
+;;    later re-fetches as :error does not retro-actively invalidate
+;;    already-derived pace rows — the re-fetch is a new receipt plus a
+;;    refresh-history entry, never an edit.
+;; 2. Provenance-chain STRICTNESS — every pace row's :provenance-chain is
+;;    the ordered receipt ids of its cited events, all existing,
+;;    non-empty, first element = first cited event's :source-receipt-id.
+;;    Inventing, trimming or re-heading a chain is a violation
+;;    (:provenance-chain-is-required-and-verified). Carry-both conflicts
+;;    keep BOTH receipts in the chain; the contract never picks a winner.
+;; 3. Readback strictness — an unknown filter key is REJECTED
+;;    (:rejected-filter), never silently ignored (which would quietly
+;;    widen the query); an :event-kind filter matches the carried kind
+;;    exactly, so a removal is never returned under a listing filter
+;;    (event kinds never collapse in readback).
 
 {:contract/id :listing-pace-observation
- :contract/version "1.0.0"
- :method/version "listing-pace-observation.v1"
+ :contract/version "2.0.0"
+ :method/version "listing-pace-observation.v2"
  :actor :cloud-itonami/app-public-fund
  :proposes-to :network-awai/app-hyakka
  :composes-with [:portfolio-listing-observation]   ; must be v1.1 or later
@@ -52,9 +73,22 @@
  :input-listing-event
  {:schema [:event-ref :event-kind :fund-vehicle-entity-id
            :portfolio-company-entity-id :event-date-or-missing
-           :source-receipt-hash :method/version]
+           :source-receipt-id :source-receipt-hash
+           :receipt-fetch-status :method/version]
   :event-kind-allow #{:listed-on-portfolio-page
                       :removed-from-portfolio-page}
+  ;; v2 admission gate: only events backed by :ok receipts may enter a
+  ;; pace count. Non-:ok receipts are recorded verbatim, produce a
+  ;; refusal record, and never back an observation.
+  :receipt-fetch-status-values #{:ok :error :redirected :not-modified
+                                 :robots-disallowed :auth-required}
+  :receipt-admission {:admitted #{:ok}
+                      :refusal-record {:schema [:event-ref :receipt-id
+                                                :receipt-fetch-status
+                                                :refused-at
+                                                :method/version]}
+                      :rule :admission-refused-receipt-backs-no-observation
+                      :re-fetch-rule :re-fetch-appends-new-receipt-plus-history}
   :rules #{:only-admitted-portfolio-listing-v1.1-events-refuse-otherwise
            :event-date-missing-is-a-flag-not-a-drop}
   ;; An event with no date on the receipt is counted in
@@ -82,7 +116,8 @@
   ;; receipts and never extrapolated across windows.
   :invariants #{:counts-are-sums-of-cited-events-not-recomputed
                 :undated-events-never-added-to-dated-count
-                :per-fund-per-window-per-kind-one-row}
+                :per-fund-per-window-per-kind-one-row
+                :admission-refused-receipt-backs-no-observation}
   ;; A window with zero cited events is a row with (0, 0) plus a
   :rules #{:zero-event-window-is-a-row-not-silence
   ;; missingness flag :no-events-in-window-from-measured-sources.
@@ -91,9 +126,19 @@
   ;; dated/undated count, and both receipts ride the provenance chain
   ;; (carry-both, never adjudicate).
            :carry-both-conflicts-no-winner}
+  ;; v2: the chain is the ordered receipt ids of the cited events —
+  ;; all existing, non-empty, first element = first cited event's
+  ;; :source-receipt-id. Inventing, trimming or re-heading is a
+  ;; violation; conflicted events keep both receipts.
+  :provenance-chain-rule
+  {:non-empty? true :subset-of-receipt-ids? true
+   :first-element-is-first-cited-event-receipt-id? true
+   :conflict-keeps-all-competing-receipts? true}
   :flag-propagation #{:event-date-not-stated :no-receipt :receipt-unparseable
                       :no-events-in-window-from-measured-sources
-                      :source-language-unmapped}
+                      :source-language-unmapped
+                      :fetch-status-non-ok :admission-refused
+                      :provenance-chain-incomplete}
   ;; Structurally excluded fields — a pace observation must not become
   ;; a leaderboard, a momentum indicator or a performance claim.
   :forbidden-fields #{:rank :score :centrality :velocity :momentum
@@ -106,13 +151,18 @@
  ;; unchanged inputs re-emits the same observation id (idempotent); a
  ;; changed input emits a NEW observation and appends a history entry
  ;; pointing at the superseded one. Superseded observations are never
- ;; deleted.
+ ;; deleted. A receipt that re-fetches with a different status appends
+ ;; a new receipt plus a history entry — it never edits or invalidates
+ ;; prior pace rows.
  :refresh-history
  {:mode :append-only
   :schema [:pace-id :re-run-at :trigger :input-digest
            :supersedes-or-nil]
+  :triggers #{:window-advanced :inputs-updated :receipt-refetched
+              :method-version-bumped}
   :rules #{:idempotent-rerun-same-inputs-same-id
-           :changed-input-new-observation-not-rewrite}}
+           :changed-input-new-observation-not-rewrite
+           :re-fetch-appends-never-edits}}
 
  ;; ── Hyakka proposal shape ──────────────────────────────────────────
  ;; Proposals are auditable QUESTIONS about measurement coverage. Never
@@ -126,7 +176,8 @@
   ;;    a receipt-stated date?"
   ;;   "Which portfolio-listing events in W could not be dated, and
   ;;    what receipts back them?"
-  ;;   "What fraction of W's receipt coverage for F resolved?"
+  ;;   "How many of F's cited receipts in W were refused admission, and
+  ;;    what fetch statuses did they carry?"
   :forbidden-kinds #{:recommendation :ranking :suitability :outreach
                      :fundraising :allocation :ownership-claim
                      :performance-claim :valuation-claim}}
@@ -136,12 +187,21 @@
  ;; missingness, and refuses to return rows without them. Readback is
  ;; read-only and never computes a score on the way out.
  :query-readback
- {:shape [:query-id :pace-id :method/version :window
+ {:request-schema [:query-id :window :filter {:keys #{:fund-vehicle
+                                                      :event-kind}}]
+  :shape [:query-id :pace-id :method/version :window
           :fund-vehicle-entity-id :event-kind
           :dated-count :undated-count :conflict-count
           :missingness-flags :provenance-chain :coverage-record
           :asserted-at]
   :required-with-every-row #{:coverage-record :missingness-flags
                              :provenance-chain}
+  ;; v2: unknown filter keys are REJECTED, never silently ignored; an
+  ;; :event-kind filter matches the carried kind exactly — a removal is
+  ;; never returned under a listing filter (kinds never collapse).
+  :strictness {:rule :unknown-filter-key-rejected-not-ignored
+               :event-kind-filter-rule :filter-matches-carried-kind-exactly}
+  :status-values #{:ok :unmeasured :out-of-window :rejected-filter
+                   :admission-refused}
   :rules #{:readback-refuses-row-without-coverage-and-missingness
            :readback-is-read-only}}}
