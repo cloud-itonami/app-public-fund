@@ -12,13 +12,30 @@
 ;; (estimated-valuation-is-not-verified-valuation). Every derived
 ;; observation traces back to a source receipt by hash.
 ;;
-;; Method version: v1 (2026-09-01). Any change to field semantics bumps
+;; Method version: v2 (2026-09-03). Any change to field semantics bumps
 ;; :method/version and appends a :refresh/history entry; old observations
 ;; are never silently reinterpreted.
+;;
+;; v2 hardening (exit-observation.v1 -> v2, no semantics silently changed):
+;; 1. Fetch-status ADMISSION — a receipt carries an explicit fetch status
+;;    (:ok, :error, :redirected, :not-modified, :robots-disallowed,
+;;    :auth-required). Only :ok receipts are ADMITTED to back a derived
+;;    observation; every other status is recorded verbatim but refuses
+;;    admission (:admission-refused-receipt-backs-no-observation). An
+;;    admitted receipt that later re-fetches as :error does not retro-
+;;    actively invalidate already-derived observations — the re-fetch is a
+;;    new receipt plus a refresh-history entry, never an edit.
+;; 2. Event-level provenance — every event carries a required
+;;    :provenance-chain (ordered receipt ids, all existing, first element
+;;    = :source-receipt-id). A derived observation must carry exactly its
+;;    event's chain; inventing or trimming receipts is a violation.
+;; 3. Readback strictness — an unknown filter key is REJECTED, not
+;;    ignored; a :consideration-kind filter never returns an event whose
+;;    consideration kind differs (announced vs completed never collapse).
 
 {:contract/id :exit-observation
- :contract/version "1.0.0"
- :method/version "exit-observation.v1"
+ :contract/version "2.0.0"
+ :method/version "exit-observation.v2"
  :actor :cloud-itonami/app-public-fund
  :proposes-to :network-awai/app-hyakka
 
@@ -38,6 +55,17 @@
  {:schema [:receipt-id :source-url :source-class :source-language
            :observed-at :content-hash :fetch-status]
   :content-hash {:algo "sha256" :of "response-body-bytes"}
+  :fetch-status-values #{:ok :error :redirected :not-modified
+                         :robots-disallowed :auth-required}
+  ;; v2 admission gate: only :ok receipts may back a derived observation.
+  :admission {:admitted #{:ok}
+              :refusal-record {:schema [:receipt-id :fetch-status
+                                        :admission-refused-at
+                                        :method/version]}
+              :rule :admission-refused-receipt-backs-no-observation
+              ;; already-derived observations are not retro-actively
+              ;; invalidated; a re-fetch appends, never edits.
+              :re-fetch-rule :re-fetch-appends-new-receipt-plus-history}
   :source-class-allow #{:official-regulator :official-stock-exchange-filing
                         :official-company-registry :company-first-party
                         :fund-first-party :manager-first-party
@@ -72,13 +100,24 @@
                            :as-stated-by-source? true}
            :valuation {:kind [:one-of :estimated-valuation :stated-listing
                          :none]}
-           :source-receipt-id]
+           :source-receipt-id
+           :provenance-chain]                ; v2: required, event-level
   ;; announced exit is not a completed exit; the two kinds are carried,
   ;; never collapsed. An estimated valuation is carried as ESTIMATED
   ;; only and is never written into a verified field.
   :invariants #{:announced-exit-is-not-completed-exit
                 :estimated-valuation-is-not-verified-valuation
-                :consideration-kind-is-carried-not-collapsed}}
+                :consideration-kind-is-carried-not-collapsed
+                :provenance-chain-is-required-and-verified
+                :admission-refused-receipt-backs-no-observation}
+  ;; v2: the chain is ordered receipt ids — all existing, non-empty,
+  ;; first element = :source-receipt-id. A derived observation carries
+  ;; exactly its event's chain; inventing or trimming receipts is a
+  ;; violation (:provenance-chain-is-required-and-verified).
+  :provenance-chain-rule
+  {:non-empty? true :subset-of-receipt-ids? true
+   :first-element-is-source-receipt-id? true
+   :observation-carries-event-chain-exactly? true}}
 
  ;; ── Missingness / coverage flags ───────────────────────────────────
  :missingness
@@ -149,5 +188,12 @@
                     :observations [:observation-id]
                     :coverage-record-ref
                     :missingness-flags]
-  :status-values #{:ok :unmeasured :out-of-window}
+  :status-values #{:ok :unmeasured :out-of-window :rejected-filter
+                   :admission-refused}
+  ;; v2: unknown filter keys are rejected, never silently ignored; a
+  ;; :consideration-kind filter never returns an event whose consideration
+  ;; kind differs — announced vs completed never collapse in readback.
+  :strictness {:rule :unknown-filter-key-rejected-not-ignored
+               :consideration-kind-filter-rule
+               :filter-matches-carried-kind-exactly}
   :rule :readback-must-carry-coverage-and-missingness}}

@@ -8,6 +8,11 @@
 ;;   2  REFUSED — a fixture could not run
 ;;
 ;; Usage: nbb tools/exit_observation_fixtures.cljs [path/to/contract.edn]
+;;
+;; v2 (2026-09-03): fetch-status admission gate, required event-level
+;; provenance chains, and strict readback (unknown filter keys rejected,
+;; consideration-kind filters match exactly). Negative fixtures construct
+;; violating inputs and assert the derivation REFUSES them.
 
 (ns exit-observation-fixtures
   (:require ["fs" :as fs]
@@ -48,7 +53,12 @@
   [(receipt "r-1" "https://example-exchange.test/ipo/listing" :official-stock-exchange-filing "en"
             "TARGET K.K. listed on the exchange")
    (receipt "r-2" "https://example-reg.test/liquidation/filing" :official-regulator "en"
-            "TARGET K.K. liquidation filing recorded")])
+            "TARGET K.K. liquidation filing recorded")
+   ;; v2: a receipt whose fetch FAILED. Recorded verbatim, but it refuses
+   ;; admission — it can never back a derived observation.
+   (assoc (receipt "r-3" "https://example-board.test/exit/announce" :official-board-record "en"
+                   "TARGET K.K. exit announcement (fetch failed)")
+          :fetch-status :error)])
 
 (def entities
   [{:entity-id "e-1" :entity-type :target :name "TARGET"
@@ -67,16 +77,78 @@
     :consideration {:kind :unstated :as-stated-by-source? true}
     ;; reported valuation is an ESTIMATE carried as estimated — never verified
     :valuation {:kind :estimated-valuation}
-    :source-receipt-id "r-1"}
+    :source-receipt-id "r-1" :provenance-chain ["r-1"]}
    {:event-id "ev-2" :event-type :liquidation-filed :entity-id "e-1"
     :announced-at "2026-08-28" :asserted-at "2026-09-01"
     ;; consideration-not-stated: the receipt states the filing, no figure.
     :consideration {:kind :unstated :as-stated-by-source? true}
     :valuation {:kind :none}
-    :source-receipt-id "r-2"}])
+    :source-receipt-id "r-2" :provenance-chain ["r-2"]}
+   ;; v2: this event's ONLY receipt refused admission — deriving an
+   ;; observation from it must be refused, with a refusal record.
+   {:event-id "ev-3" :event-type :exit-announced :entity-id "e-1"
+    :announced-at "2026-08-25" :asserted-at "2026-09-01"
+    :consideration {:kind :announced-consideration
+                    :currency "JPY" :as-stated-by-source? true}
+    :valuation {:kind :none}
+    :source-receipt-id "r-3" :provenance-chain ["r-3"]}])
 
 (def window {:from "2026-08-01" :until "2026-09-01"
              :declared-at "2026-09-01" :timezone "UTC"})
+
+;; ── v2 derivation model (deterministic, mirrors the contract) ───────
+(defn admitted? [contract receipts r]
+  (contains? (get-in contract [:source-receipt :admission :admitted])
+             (:fetch-status r)))
+
+(defn chain-valid?
+  "v2 provenance-chain rule: non-empty, all ids exist, first element is
+  the event's :source-receipt-id."
+  [receipt-ids ev]
+  (let [ch (:provenance-chain ev)]
+    (and (vector? ch) (seq ch)
+         (every? #(contains? receipt-ids %) ch)
+         (= (first ch) (:source-receipt-id ev)))))
+
+(defn derive-observations
+  "Returns {:observations [...] :refusals [...]} under the v2 rules:
+  an event with no admitted receipt in its chain is refused with a
+  refusal record; a chain-invalid event is refused as a provenance
+  violation. No third outcome exists."
+  [contract receipts events]
+  (let [by-id (into {} (map (juxt :receipt-id identity) receipts))
+        receipt-ids (set (keys by-id))]
+    (reduce
+      (fn [acc ev]
+        (cond
+          (not (chain-valid? receipt-ids ev))
+          (update acc :refusals conj {:event-id (:event-id ev)
+                                      :reason :provenance-chain-invalid})
+          (not (some #(admitted? contract receipts (get by-id %))
+                     (:provenance-chain ev)))
+          (update acc :refusals conj
+                  {:receipt-id (:source-receipt-id ev)
+                   :fetch-status (:fetch-status (get by-id (:source-receipt-id ev)))
+                   :admission-refused-at "2026-09-01"
+                   :method/version (:method/version contract)})
+          :else
+          (update acc :observations conj
+                  {:observation-id (str "o-" (:event-id ev))
+                   :method/version (:method/version contract)
+                   :window window
+                   :observation-kind (get {:ipo-listed :ipo-listed-in-window
+                                           :liquidation-filed :liquidation-filed-in-window
+                                           :exit-announced :exit-announced-in-window
+                                           :acquisition-completed :acquisition-completed-in-window}
+                                          (:event-type ev))
+                   :entity-id (:entity-id ev) :event-id (:event-id ev)
+                   :value {:kind :exit-event-count :basis #{:receipt-only}}
+                   :missingness-flags (if (= :unstated (-> ev :consideration :kind))
+                                        #{:consideration-not-stated} #{})
+                   :provenance-chain (:provenance-chain ev)
+                   :asserted-at "2026-09-01"})))
+      {:observations [] :refusals []}
+      events)))
 
 ;; ── Fixtures ────────────────────────────────────────────────────────
 
@@ -130,18 +202,103 @@
     (when (in? "2026-09-01") (fail! f "until is exclusive; 2026-09-01 must be out"))))
 
 (defn fixture-derived-observation [f]
-  ;; No forbidden field may appear in a derived observation record.
+  ;; No forbidden field may appear in a derived observation record, and
+  ;; (v2) the observation carries its event's provenance-chain exactly.
   (let [{:keys [forbidden-fields]} (:derived-observation contract)
-        obs {:observation-id "o-1" :method/version (:method/version contract)
-             :window window :observation-kind :ipo-listed-in-window
-             :entity-id "e-1" :event-id "ev-1"
-             :value {:kind :exit-event-count :basis #{:receipt-only}}
-             :missingness-flags #{}
-             :provenance-chain ["r-1"]
-             :asserted-at "2026-09-01"}
-        keys' (set (map keyword (keys obs)))]
-    (when (some #(contains? keys' (keyword (name %))) forbidden-fields)
-      (fail! f "derived observation carries a forbidden field"))))
+        {:keys [observations refusals]} (derive-observations contract receipts events)
+        obs (some #(when (= (:event-id %) "ev-1") %) observations)]
+    (when (nil? obs) (fail! f "ev-1 must derive an observation"))
+    (let [keys' (set (map keyword (keys obs)))]
+      (when (some #(contains? keys' (keyword (name %))) forbidden-fields)
+        (fail! f "derived observation carries a forbidden field")))
+    (when-not (= (:provenance-chain obs) ["r-1"])
+      (fail! f "observation must carry its event's provenance-chain exactly"))
+    (when-not (contains? (set (map :receipt-id refusals)) "r-3")
+      (fail! f "ev-3 (admission-refused receipt r-3) must not derive an observation"))))
+
+(defn fixture-fetch-admission [f]
+  ;; v2: only :ok receipts are admitted. The refusal must produce a
+  ;; refusal RECORD (not silence), and the refused receipt never backs
+  ;; an observation. A re-fetch appends; it does not retro-invalidate.
+  (let [{:keys [observations refusals]}
+        (derive-observations contract receipts events)
+        refused (some #(when (= (:receipt-id %) "r-3") %) refusals)]
+    (when-not (and (= (count observations) 2)
+                   (every? #(not= (:event-id %) "ev-3") observations))
+      (fail! f "an admission-refused receipt backed an observation"))
+    (when (nil? refused)
+      (fail! f "admission refusal must produce a refusal record, not silence"))
+    (when-not (and (= (:fetch-status refused) :error)
+                   (= (:method/version refused) (:method/version contract)))
+      (fail! f "refusal record must carry fetch-status and method/version"))
+    (when-not (contains? (:status-values (:query-readback contract))
+                         :admission-refused)
+      (fail! f "readback must be able to answer :admission-refused"))
+    (let [statuses (:fetch-status-values (:source-receipt contract))]
+      (when-not (and (contains? statuses :ok) (contains? statuses :error))
+        (fail! f "contract must declare the fetch-status vocabulary")))))
+
+(defn fixture-provenance-chain [f]
+  ;; v2 negative fixtures: a chain that invents a receipt id, trims the
+  ;; head, or is empty must be REFUSED, never silently derived.
+  (let [bad-events
+        [{:event-id "ev-bad-1" :event-type :ipo-listed :entity-id "e-1"
+          :announced-at "2026-08-20" :asserted-at "2026-09-01"
+          :consideration {:kind :unstated :as-stated-by-source? true}
+          :valuation {:kind :none}
+          :source-receipt-id "r-1" :provenance-chain ["r-invented"]}
+         {:event-id "ev-bad-2" :event-type :ipo-listed :entity-id "e-1"
+          :announced-at "2026-08-20" :asserted-at "2026-09-01"
+          :consideration {:kind :unstated :as-stated-by-source? true}
+          :valuation {:kind :none}
+          :source-receipt-id "r-1" :provenance-chain []}
+         {:event-id "ev-bad-3" :event-type :ipo-listed :entity-id "e-1"
+          :announced-at "2026-08-20" :asserted-at "2026-09-01"
+          :consideration {:kind :unstated :as-stated-by-source? true}
+          :valuation {:kind :none}
+          :source-receipt-id "r-2" :provenance-chain ["r-1" "r-2"]}]]
+    ;; ev-bad-3: head is NOT the source-receipt-id -> invalid.
+    (doseq [ev bad-events]
+      (let [{:keys [observations refusals]}
+            (derive-observations contract receipts [ev])]
+        (when-not (and (empty? observations)
+                       (= 1 (count refusals))
+                       (= :provenance-chain-invalid (:reason (first refusals))))
+          (fail! f (str "invalid chain for " (:event-id ev)
+                        " was not refused")))))
+    (when-not (contains? (:invariants (:event-record contract))
+                         :provenance-chain-is-required-and-verified)
+      (fail! f "contract must declare the provenance-chain invariant"))))
+
+(defn fixture-consideration-kind-readback [f]
+  ;; v2: a :consideration-kind filter matches the CARRIED kind exactly —
+  ;; an announced consideration is never returned under a completed
+  ;; filter (announced vs completed never collapse in readback).
+  (let [ev-3 (some #(when (= (:event-id %) "ev-3") %) events)
+        completed? (fn [ev] (= :completed-consideration (-> ev :consideration :kind)))
+        filtered (filter completed? [ev-3])]
+    (when-not (empty? filtered)
+      (fail! f "consideration-kind filter collapsed announced into completed"))
+    (when-not (= :filter-matches-carried-kind-exactly
+                 (get-in contract [:query-readback :strictness
+                                   :consideration-kind-filter-rule]))
+      (fail! f "contract must declare exact consideration-kind filtering"))))
+
+(defn fixture-unknown-filter-key [f]
+  ;; v2: an unknown filter key is REJECTED (:rejected-filter), never
+  ;; silently ignored (which would quietly widen the query).
+  (let [request {:query-id "q-2" :observation-kind :ipo-listed-in-window
+                 :window window
+                 :filter {:returns-greater-than 100}}
+        known #{:jurisdiction :entity-type :event-type :consideration-kind}
+        unknown-keys (remove #(contains? known %) (keys (:filter request)))]
+    (when-not (empty? unknown-keys)
+      (when-not (contains? (:status-values (:query-readback contract))
+                           :rejected-filter)
+        (fail! f "unknown filter key could not be rejected: no status"))
+      (when-not (= :unknown-filter-key-rejected-not-ignored
+                   (get-in contract [:query-readback :strictness :rule]))
+        (fail! f "contract must declare unknown-filter-key rejection")))))
 
 (defn fixture-refresh-history [f]
   (let [h {:history-id "h-1" :observation-id "o-1"
@@ -185,6 +342,10 @@
    "valuation-kinds" fixture-valuation-kinds
    "window-bounds" fixture-window
    "derived-observation" fixture-derived-observation
+   "fetch-admission" fixture-fetch-admission
+   "provenance-chain" fixture-provenance-chain
+   "consideration-kind-readback" fixture-consideration-kind-readback
+   "unknown-filter-key" fixture-unknown-filter-key
    "refresh-history" fixture-refresh-history
    "readback" fixture-readback
    "coverage-missingness" fixture-coverage-missingness})

@@ -16,13 +16,19 @@
 ;; control or personal wealth, and produces no investment advice.
 ;; Every derived observation traces back to a source receipt by hash.
 ;;
-;; Method version: v1 (2026-09-01). Any change to field semantics bumps
+;; Method version: v2 (2026-09-02). v2 additions: fetch-status admission
+;; (a receipt whose fetch was not fully :ok backs no observation and
+;; flags :fetch-status-non-ok) and event-level provenance (:provenance-chain
+;; is required on every event, not only on derived observations; an event
+;; with no traceable receipt chain is unmeasured,
+;; :provenance-chain-incomplete). Any change to field semantics bumps
 ;; :method/version and appends a :refresh/history entry; old
 ;; observations are never silently reinterpreted.
+;; v1 (2026-09-01) established the participant-naming observation shape.
 
 {:contract/id :round-participant-observation
- :contract/version "1.0.0"
- :method/version "round-participant-observation.v1"
+ :contract/version "2.0.0"
+ :method/version "round-participant-observation.v2"
  :actor :cloud-itonami/app-public-fund
  :proposes-to :network-awai/app-hyakka
 
@@ -53,7 +59,19 @@
                          :captcha-bypass :generated-participant-list}
   :source-class-discovery-only #{:news-report :licensed-commercial-aggregator}
   :fetch {:respect-robots? true :respect-auth-waf-captcha? true
-          :user-agent "app-public-fund-round-participant-observation/1.0"}}
+          :user-agent "app-public-fund-round-participant-observation/1.0"}
+  ;; v2 fetch-status admission: a receipt whose fetch was not fully :ok
+  ;; (network error, non-2xx status, partial body) is unmeasured — it
+  ;; backs no entity, event or derived observation, and any observation
+  ;; that would otherwise cite it instead carries
+  ;; :fetch-status-non-ok with the non-ok receipt id recorded in the
+  ;; refresh history, never in a silent drop.
+  :fetch-admission
+  {:rule :fetch-status-must-be-ok
+   :ok-values #{:ok 200}
+   :non-ok-flag :fetch-status-non-ok
+   :invariant #{:non-ok-receipt-backs-no-observation
+                :non-ok-receipt-is-recorded-never-dropped}}}
 
  ;; ── Typed entity/event inputs ──────────────────────────────────────
  ;; Entity separation is a hard invariant: financing round, company,
@@ -75,17 +93,23 @@
            :role {:kind [:one-of :lead-participant :participant
                          :co-investor :unstated]
                   :as-stated-by-source? true}
-           :observed-at :asserted-at :source-receipt-id]
+           :observed-at :asserted-at :source-receipt-id
+           :provenance-chain]
+  ;; v2: an event's receipt chain is required, not derived later. An
+  ;; event with no traceable receipt chain is unmeasured
+  ;; (:provenance-chain-incomplete) and backs no derived observation.
   :invariants #{:participant-naming-is-not-ownership-or-endorsement
                 :roles-carried-not-collapsed
-                :round-and-participant-are-distinct-entities}}
+                :round-and-participant-are-distinct-entities
+                :provenance-chain-required-on-every-event}}
 
  ;; ── Missingness / coverage flags ───────────────────────────────────
  :missingness
  {:flags #{:no-receipt :receipt-unparseable :role-unstated
            :financing-round-unstated :participant-entity-unstated
            :jurisdiction-unstated :identifier-unstated
-           :source-language-unmapped :first-party-source-conflict}
+           :source-language-unmapped :first-party-source-conflict
+           :fetch-status-non-ok :provenance-chain-incomplete}
   :rule :missing-is-unmeasured
   :coverage-unit [:jurisdiction :source :language :year
                   :identifier-class]

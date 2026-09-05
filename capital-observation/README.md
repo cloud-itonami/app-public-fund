@@ -4,6 +4,46 @@ Bounded actor contracts in this directory observe public capital-market
 surface with provenance, and propose results to `network-awai/app-hyakka`
 as auditable questions — never as scores, rankings or advice.
 
+## listing-pace-observation.edn
+
+- Compositional v1 contract (2026-09-03) that re-counts events already
+  admitted by `portfolio-listing-observation.v1.1+` per fund vehicle per
+  window, with one added dimension: whether the listing event carried a
+  receipt-stated date. Emits per (fund-vehicle, window, event-kind) rows
+  of `dated-count` / `undated-count` / `conflict-count` — counts are sums
+  over cited events, undated events are never dropped or back-dated and
+  never added to the dated count, and zero-event windows are rows (0, 0)
+  with a `:no-events-in-window-from-measured-sources` flag, not silence.
+  Carry-both conflicts ride the provenance chain; no winner is picked.
+  Structurally excludes rank/score/velocity/momentum/valuation fields —
+  a pace count is not activity, momentum or performance
+  (`listing-pace-is-not-activity`, `undated-is-not-quiet`,
+  `pace-is-not-performance`). Deterministic offline fixtures:
+  `tools/listing_pace_fixtures.cljs`.
+
+
+v2 additions (2026-09-05):
+
+- **Fetch-status admission**: an input event now carries its receipt's
+  fetch status; only `:ok` receipts may back a pace count. Refused
+  receipts produce a refusal record (never silence) and never appear in
+  a provenance chain; a later re-fetch appends a new receipt plus a
+  refresh-history entry (`:receipt-refetched`) and never edits or
+  invalidates prior rows.
+- **Provenance-chain strictness**: every pace row's chain is the ordered
+  receipt ids of its cited events — non-empty, subset of receipt ids,
+  first element = first cited event's receipt; conflicted events keep
+  all competing receipts (`:provenance-chain-is-required-and-verified`).
+- **Readback strictness**: unknown filter keys are rejected
+  (`:rejected-filter`), never silently ignored; an `:event-kind` filter
+  matches the carried kind exactly, so a removal is never returned under
+  a listing filter; `:admission-refused` is a first-class status.
+
+Verify v2 deterministically (offline, no network):
+
+```bash
+nbb tools/listing_pace_v2_fixtures.cljs
+```
 ## fund-close-observation.edn
 
 - A machine-readable contract covering source receipts (sha256 of verbatim
@@ -59,7 +99,7 @@ close) and are never collapsed.
 nbb tools/capital_observation_fixtures.cljs
 ```
 
-## LP-commitment observation (`lp-commitment-observation.v1`)
+## LP-commitment observation (`lp-commitment-observation.v2`)
 
 `lp-commitment-observation.edn` is a second bounded contract in this
 directory, observing **stated LP commitments** to funds with provenance.
@@ -90,6 +130,32 @@ nbb tools/lp_commitment_fixtures.cljs
 Exit codes: `0` all fixtures ran clean · `1` a violation was found ·
 `2` REFUSED (contract could not be read).
 
+v2 additions (2026-09-02):
+
+- **Provenance on every record**: `:provenance-chain` is required on every
+  event AND every entity record, each citing its own receipt
+  (`:provenance-chain-required-on-every-event` /
+  `:provenance-chain-required-on-every-entity-record`).
+- **Identifier invariants**: one `:identifier-value` never denotes two
+  entity types and one entity id carries exactly one identifier value; a
+  missing identifier is `:identifier-unstated`, never guessed from a
+  brand string.
+- **Receipt disagreement is recorded, never resolved**: two allow-class
+  receipts stating different commitment amounts produce a
+  `:receipt-disagreement` flagged observation carrying ALL conflicting
+  receipt ids with value `:unmeasured` — never an average or a winner.
+- **Fetch-status admission**: a receipt whose fetch was not fully `:ok`
+  backs no observation and flags `:fetch-status-non-ok`.
+- **Discovery-only appears in no chain**: news-report and
+  licensed-commercial-aggregator receipts (`rcpt-l4` in fixtures) appear
+  in NO provenance chain, event, entity or derived observation.
+
+Verify v2 deterministically (offline, no network):
+
+```bash
+nbb tools/lp_commitment_v2_fixtures.cljs
+```
+
 ## Readback pagination (`observation-query-readback.edn`)
 
 A compositional contract constraining HOW observation records are served
@@ -114,6 +180,19 @@ entities with provenance, proposed to Hyakka as auditable questions.
   and are never collapsed. An estimated valuation is carried with kind
   `:estimated-valuation` only — a verified/current valuation field cannot
   exist in the derived-observation shape by construction.
+- **v2 hardening** (`exit-observation.v2`, 2026-09-03): receipts carry an
+  explicit fetch status (`:ok :error :redirected :not-modified
+  :robots-disallowed :auth-required`) and only `:ok` receipts are
+  admitted to back a derived observation — a refused admission produces a
+  refusal record, never silence, and never a retro-invalidation of
+  already-derived observations (a re-fetch appends). Every event carries
+  a required `:provenance-chain` (all ids exist, head = its
+  `:source-receipt-id`) and a derived observation carries its event's
+  chain exactly — invented or trimmed receipts are refused. Readback is
+  strict: an unknown filter key answers `:rejected-filter` instead of
+  being ignored, and a `:consideration-kind` filter matches the carried
+  kind exactly, so an announced consideration is never returned under a
+  completed filter.
 - Same guarantees as above: hash-backed receipts, entity separation,
   time-bounded windows, missingness flags, append-only refresh history
   (reclassification appends, never overwrites), no rank/score/returns/
@@ -280,6 +359,23 @@ epistemic boundaries enforced by construction:
 nbb tools/financing_round_fixtures.cljs
 ```
 
+v2 additions (2026-09-03):
+
+- **Fetch-status admission**: `:receipt-admission` declares
+  `:fetch-status-ok-required`. A receipt whose fetch was not `:ok` is
+  still recorded but backs no observation and flags
+  `:fetch-status-non-ok`.
+- **Event-level provenance**: every event carries a `:provenance-chain`
+  of receipt ids that must all exist; a broken chain is
+  `:provenance-chain-incomplete` (unmeasured, never inferred).
+- **Receipt disagreement is recorded, never resolved**: two admissible
+  receipts stating different facts about the same round yield a
+  `:receipt-disagreement` observation with value `:unmeasured` and ALL
+  conflicting receipt ids in its chain. The contract declares no
+  winner-picking mechanism.
+- Fixture runner extended to 12 fixtures (3 new), with a negative check:
+  run against the v1 contract it reports 13 failures and exits 1.
+
 What these are not:
 
 - Not a score or ranking. Not investment advice, ownership, endorsement or
@@ -320,6 +416,16 @@ as auditable questions.
   with both receipts. Resolution is always `:carry-both-never-resolve`
   — no winner is picked, and a conflict never resolves into an
   ownership or endorsement claim.
+
+v2 additions (2026-09-02):
+
+- **Fetch-status admission**: a receipt whose fetch was not fully `:ok`
+  backs no entity, event or derived observation and flags
+  `:fetch-status-non-ok`. A non-ok receipt is recorded, never silently
+  dropped.
+- **Event-level provenance**: `:provenance-chain` is required on every
+  event, not only on derived observations. An event with no traceable
+  receipt chain is unmeasured (`:provenance-chain-incomplete`).
 
 Verify deterministically (offline, no network):
 
@@ -373,6 +479,52 @@ hash-backed claims, proposed to Hyakka as auditable questions.
   `:listing-kind` filter matches the carried kind exactly, so a
   `:named-consortium` edge is never returned under a
   `:named-investors` filter (listing kinds never collapse in readback).
+
+## Fund service-provider observation contract (`fund-service-provider-observation.edn`)
+
+`fund-service-provider-observation.edn`
+(`fund-service-provider-observation.v1`) is a bounded actor contract for
+observing **fund service-provider namings** — "source S named provider P
+in role R for fund vehicle F at time T" (auditor, administrator,
+custodian, transfer agent, placement agent) — as first-party or
+regulator/registry-backed, hash-backed claims, proposed to Hyakka as
+auditable questions.
+
+- A provider naming is a source's own statement. It is **not** a
+  verified or current engagement, not a fee/compensation or revenue
+  fact, not an endorsement, and never a diligence opinion about either
+  party (`naming-is-not-verified-engagement`,
+  `naming-is-not-fee-or-revenue-fact`).
+- Roles are carried as the source's own words and never collapsed
+  (`role-is-carried-not-collapsed`); an unstated role is carried as
+  `:unstated`, never guessed from context or a directory.
+- Only first-party (fund / manager) and official regulator / registry /
+  filing sources may back a derived observation; news reports and
+  scraped provider directories are discovery-only. Same guarantees as
+  the other contracts: sha256-backed verbatim receipts, `fetch-status
+  :ok` admission, hard entity separation (a provider, a fund vehicle,
+  its management company and its GP stay distinct even when they share
+  a brand), participant ids must resolve to declared entities, half-open
+  time-bounded windows (`missing-is-unmeasured`, `:out-of-window`
+  outside the window), append-only refresh history (a retraction
+  appends, the naming record is never edited), no
+  rank/score/returns/ownership/fee/suitability fields by construction,
+  questions-only Hyakka proposal, and a deterministic readback that
+  always carries coverage + missingness + provenance.
+- **Cross-source conflict**: when two allowed sources disagree about
+  the same (fund-vehicle, provider, role) naming in the same window,
+  the disagreement is carried as a `:conflict-observation` with both
+  receipts. Resolution is always `:carry-both-never-resolve` — no
+  winner is picked, and a conflict never resolves into a
+  verified-engagement claim. One source's naming plus another source's
+  silence is not a conflict — silence is unmeasured.
+
+Verify deterministically (offline, no network):
+
+```bash
+nbb tools/fund_service_provider_fixtures.cljs
+```
+
 ## Source receipt refresh observation contract (`source-receipt-refresh-observation.edn`)
 
 `source-receipt-refresh-observation.edn` is the **integrity plane**
@@ -410,3 +562,162 @@ Verify deterministically (offline, no network):
 nbb tools/co_investment_fixtures.cljs
 nbb tools/source_receipt_refresh_fixtures.cljs
 ```
+
+## Regulator registration observation contract (`regulator-registration-observation.edn`)
+
+`regulator-registration-observation.edn` is a bounded actor contract for
+observing **public regulatory registration / filing records** of fund
+managers (investment-adviser registrations, registry filing records),
+proposed to Hyakka as auditable questions.
+
+- Only official regulator / registry / securities-filing sources may
+  back a derived observation — for registrations, a manager's own page
+  is NOT evidence a registration exists (first-party classes are
+  discovery-only here, stricter than the system-wide allow set).
+- `registration-is-not-endorsement-or-fitness`; a filing's stated
+  figures (AUM, client counts) are carried only under `:as-stated` and
+  never promoted; `:verified-aum` is structurally forbidden.
+- `announced-effective-is-not-effective`; `withdrawal-is-not-rejection`
+  — event kinds survive distinct and never collapse.
+- **v2 hardening** (2026-09-05): (1) fetch-status **admission gate** —
+  only `:ok` receipts are admitted; a refused admission produces a
+  refusal record, never silence, and never retro-invalidates earlier
+  observations (a re-fetch appends). (2) required **event-level
+  provenance chains** — non-empty, all ids exist, head =
+  `:source-receipt-id`; the derived observation carries its event's
+  chain exactly. (3) **strict readback** — unknown filter keys answer
+  `:rejected-filter`, and an `:event-type` filter matches the carried
+  kind exactly (a withdrawal is never returned under a filed filter).
+
+Verify deterministically (offline, no network):
+
+```bash
+nbb tools/regulator_registration_fixtures.cljs
+```
+## LP-commitment observation (`lp-commitment-observation.v1`)
+(`fund-service-provider-observation.v2`; v1 was 2026-09-04) is a bounded
+actor contract for
+- **v2 hardening** (`fund-service-provider-observation.v2`, 2026-09-05):
+  an explicit fetch-status vocabulary (`:ok :error :redirected
+  :not-modified :robots-disallowed :auth-required`) with only `:ok`
+  receipts admitted — a refused admission produces a refusal record,
+  never silence, and never retro-invalidates derived observations (a
+  re-fetch appends). Every event requires a verifiable
+  `:provenance-chain` (non-empty, all ids exist, head =
+  `:source-receipt-id`) and the derived observation carries its event's
+  chain **exactly** — invented/trimmed/re-headed chains are refused
+  (`:provenance-chain-invalid`). Readback is strict: an unknown filter
+  key answers `:rejected-filter` instead of being ignored, and a
+  `:provider-role` filter matches the carried role exactly, so an
+  `:unstated` role is never returned under a specific-role filter.
+nbb tools/fund_service_provider_fixtures.cljs   # 18 fixtures (v2)
+(`coverage-rollup-observation.v1`) is a compositional contract that
+## Startup status observation contract (`startup-observation.edn`)
+`startup-observation.edn` (`startup-observation.v1`) is a bounded actor
+contract for observing **startup-status namings** — "source S named
+company C as a startup (or as a former startup) at time T" — as
+registry- or first-party-backed, hash-backed claims, proposed to Hyakka
+- `startup-is-a-time-bounded-observation-not-a-permanent-class`: an
+  observation is valid **only inside its window**; outside it the
+  readback answers `:out-of-window` — never "still true", never "no
+  longer true". A later classification change (e.g. the registry naming
+  the company as acquired) is a NEW event plus an append-only history
+  entry; the earlier naming is never overwritten, deleted, or
+  reinterpreted as "false" in hindsight.
+- A named stage is the source's own word bound to a receipt — **not** a
+  verified stage, not performance, momentum or success
+  (`named-stage-is-not-a-verified-stage`,
+  `former-status-is-not-a-performance-or-success-fact`). Two allowed
+  sources naming different stages are both carried; no "true stage" is
+  ever merged.
+- Only allowed sources (company/registry first-party classes) may back a
+  derived observation; news reports are discovery-only. Same guarantees
+  as the other contracts: sha256-backed verbatim receipts, hard entity
+  separation (a company, a fund vehicle and a management company sharing
+  a brand stay distinct), half-open time-bounded windows, missingness
+  flags (`missing-is-unmeasured`, `:stage-unstated`), no
+  rank/score/success-likelihood/growth-rate/valuation/returns/ownership/
+  suitability fields by construction, questions-only Hyakka proposal,
+  and a deterministic readback that always carries coverage +
+nbb tools/startup_observation_fixtures.cljs
+## Fund investment focus observation contract (`fund-investment-focus-observation.edn`)
+`fund-investment-focus-observation.edn` is a bounded actor contract for
+observing **stated fund investment focus** — "source S stated that fund
+vehicle F targets focus dimension K (sector / geography / stage) with
+value V as of time T" — as first-party or registry/securities-filing-backed,
+- A stated focus is the source's own statement of intent. It is **not**
+  an actual allocation or deployment, a portfolio composition record, a
+  performance measure, an endorsement or a suitability signal
+  (`stated-focus-is-not-actual-allocation`).
+- Focus dimensions are carried separately and are never collapsed
+  (`focus-dimensions-carried-not-collapsed`): a stated sector is not a
+  stated geography, a stated geography is not a stated stage, and a
+  stated stage is not an actual check size.
+- A focus-change announcement is an **amendment**: a new
+  `:focus-change-announced` observation plus a history entry. The
+  earlier stated focus value is never overwritten or deleted
+  (`focus-change-appends-does-not-overwrite`).
+- Only first-party sources (fund / manager / official registry /
+  securities filings) may back a derived observation; news reports are
+  discovery-only. Same guarantees as the other contracts: sha256-backed
+  verbatim receipts, hard entity separation (fund vehicle, management
+  company and GP stay distinct even when they share a brand), half-open
+  time-bounded windows, missingness flags (`missing-is-unmeasured`),
+  cross-source conflict carried as `:conflict-observation` with
+  `:carry-both-never-resolve`, append-only refresh history, no
+  rank/score/allocation/portfolio-composition/returns/health/
+nbb tools/fund_investment_focus_fixtures.cljs
+## Fund term and vintage observation contract (`fund-term-and-vintage-observation.edn`)
+`fund-term-and-vintage-observation.edn` is a bounded actor contract for
+observing **stated fund lifecycle dates** — "source S stated that fund
+vehicle F has lifecycle date D of kind K as of time T" — as first-party
+or registry/securities-filing-backed, hash-backed claims, proposed to
+Hyakka as auditable questions.
+- A stated date is the source's own statement. It is **not** an actual
+  or verified lifecycle event, a performance measure, an endorsement or
+  a suitability signal (`stated-date-is-not-actual-event`).
+- Date kinds are carried separately and are never collapsed
+  (`date-kinds-carried-not-collapsed`): a stated first-close date is not
+  a final-close date, a stated term end is not an actual liquidation,
+  and a vintage year is not a first-deployment date.
+- An extension announcement is an **amendment**: a new
+  `:extension-announced` observation plus a history entry. The earlier
+  stated term end is never overwritten or deleted
+  (`extension-appends-does-not-overwrite`).
+  rank/score/returns/TVPI/DPI/deployment-pace/dry-powder/fund-health/
+nbb tools/fund_term_vintage_fixtures.cljs
+## Valuation estimate observation contract (`valuation-estimate-observation.edn`)
+`valuation-estimate-observation.edn` is a bounded actor contract for
+observing **publicly stated valuation estimates and valuation claims** —
+"source S stated an estimated/claimed valuation V for company C as of
+time T, with basis B" — as source-backed claims, proposed to Hyakka as
+- An estimated valuation is an **opinion artifact**: it is not a
+  verified valuation, a transaction price, NAV, ownership, a return, a
+  momentum signal or investment suitability
+  (`estimated-valuation-is-not-verified-valuation`; `verified-valuation`,
+  `nav`, `implied-markup`, `round-step-up`, `revenue-multiple` and
+  `reconciled-valuation` are structurally forbidden fields). The
+  contract never computes markups, step-ups, multiples or implied
+  returns across rounds.
+- Amount, currency, **basis** (`post-money-claim` / `pre-money-claim` /
+  `mark-to-model-estimate` / `stated-basis-unspecified`) and **as-of**
+  date are carried verbatim and never collapsed
+  (`estimate-basis-and-currency-carried-not-collapsed`); a re-published
+  number without its own stated basis is
+  `:estimate-basis-unstated`, i.e. unmeasured here.
+- Allowed sources: company first-party, official registry filings, and
+  licensed commercial aggregators **only for their own explicitly
+  labelled estimates**. News reports are discovery-only.
+- **Cross-source conflict**: two allowed sources stating different
+  estimates for the same company are carried as a
+  `:conflict-observation` with both receipts and both stated values —
+  `:carry-both-never-resolve`, never averaged, never reconciled
+  (`no-averaging-of-competing-estimates`).
+  receipts, hard entity separation (company, financing round and
+  estimating source stay distinct even when they share a brand),
+  half-open windows, missingness flags (`missing-is-unmeasured`),
+  append-only refresh history (a revision or retraction appends, never
+  overwrites), no rank/score fields by construction, questions-only
+  Hyakka proposal, and a deterministic readback that always carries
+  coverage + missingness.
+nbb tools/valuation_estimate_fixtures.cljs

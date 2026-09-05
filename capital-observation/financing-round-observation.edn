@@ -12,13 +12,15 @@
 ;; infer ownership or personal wealth, and produces no investment advice.
 ;; Every derived observation traces back to one source receipt by hash.
 ;;
-;; Method version: v1 (2026-09-01). Any change to field semantics bumps
+;; Method version: v2 (2026-09-03). Any change to field semantics bumps
 ;; :method/version and appends a :refresh/history entry; prior observations
-;; are never silently reinterpreted.
+;; are never silently reinterpreted. v2 hardens fetch-status admission,
+;; event-level provenance, and receipt disagreement (recorded, never
+;; resolved).
 
 {:contract/id :financing-round-observation
- :contract/version "1.0.0"
- :method/version "financing-round-observation.v1"
+ :contract/version "2.0.0"
+ :method/version "financing-round-observation.v2"
  :actor :cloud-itonami/app-public-fund
  :proposes-to :network-awai/app-hyakka
 
@@ -52,6 +54,37 @@
   :fetch {:respect-robots? true :respect-auth-waf-captcha? true
           :user-agent "app-public-fund-capital-observation/1.0"}}
 
+ ;; ── v2: receipt admission ──────────────────────────────────────────
+ ;; A receipt whose fetch did not fully succeed backs no observation.
+ ;; It is still recorded (missing-is-unmeasured, never guessed), but it
+ ;; is flagged and excluded from the derived-observation basis.
+ :receipt-admission
+ {:rule :fetch-status-ok-required
+  :admissible-status #{:ok}
+  :else {:missingness-flag :fetch-status-non-ok
+         :backs-observation? false}}
+
+ ;; ── v2: event-level provenance ─────────────────────────────────────
+ ;; Every event must cite a provenance chain of receipt ids that all
+ ;; exist in this contract's receipt set. An event with no traceable
+ ;; chain is unmeasured (:provenance-chain-incomplete), never inferred.
+ :event-provenance
+ {:required? true
+  :rule :every-event-cites-existing-receipts
+  :incomplete-flag :provenance-chain-incomplete}
+
+ ;; ── v2: receipt disagreement ───────────────────────────────────────
+ ;; Two admissible receipts stating different facts about the same
+ ;; round produce a :receipt-disagreement flagged observation whose
+ ;; value is :unmeasured and whose provenance chain carries ALL
+ ;; conflicting receipt ids. The contract never picks a winner.
+ :receipt-disagreement
+ {:rule :recorded-never-resolved
+  :missingness-flag :receipt-disagreement
+  :provenance :all-conflicting-receipt-ids
+  :result-value :unmeasured}
+
+
  ;; ── Typed entity/event inputs ──────────────────────────────────────
  ;; Entity separation is a hard invariant: the company (brand or legal
  ;; entity), the venture firm, the fund vehicle and the general partner
@@ -84,6 +117,7 @@
            :stage {:kind [:one-of :pre-seed :seed :series-a :series-b
                     :series-c :series-d-plus :growth :unknown]}
            :participants [:participant-claim]
+           :provenance-chain
            :source-receipt-id]
   :participant-claim
   {:schema [:participant-entity-id :stated-role
@@ -100,7 +134,9 @@
  {:flags #{:no-receipt :receipt-unparseable :amount-not-stated
            :stage-unstated :company-jurisdiction-unstated
            :participant-role-unstated :source-language-unmapped
-           :amount-kind-unmappable}
+           :amount-kind-unmappable
+           :fetch-status-non-ok :provenance-chain-incomplete
+           :receipt-disagreement}
   :rule :missing-is-unmeasured
   :coverage-unit [:jurisdiction :source :language :year :industry :stage
                   :identifier-class]
