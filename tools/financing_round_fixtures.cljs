@@ -3,6 +3,9 @@
 ;; financing-round-observation contract
 ;; (`capital-observation/financing-round-observation.edn`).
 ;;
+;; v2 (2026-09-03): adds fetch-status admission, event-level provenance,
+;; and receipt-disagreement (recorded, never resolved) fixtures.
+;;
 ;; Exit codes mirror tools/verify.cljs:
 ;;   0  all fixtures ran and found nothing wrong
 ;;   1  a fixture ran and found a violation
@@ -47,7 +50,16 @@
   [(receipt "r-1" "https://example-co.test/news/seed" :company-first-party "en"
             "Company X announces seed round")
    (receipt "r-2" "https://example-registry.test/filings/1" :official-company-registry "ja"
-            "Registry filing for Company K.K.")])
+            "Registry filing for Company K.K.")
+   ;; v2: a non-ok fetch is recorded but must back no observation.
+   {:receipt-id "r-3" :source-url "https://example-co.test/news/seed-mirror"
+    :source-class :company-first-party :source-language "en"
+    :observed-at "2026-09-01" :content-hash (sha256 "mirror page bytes")
+    :fetch-status 404}
+   ;; v2: a second admissible receipt that DISAGREES with r-1 on the
+   ;; stated amount for the same round.
+   (receipt "r-4" "https://example-investor.test/round/seed" :fund-first-party "en"
+            "Investor page states a different amount for the seed round")])
 
 (def entities
   [{:entity-id "c-1" :entity-type :company :name "Company X"
@@ -221,6 +233,87 @@
     (when-not (contains? reasons :round-corrected-by-source)
       (fail! :refresh-history "refresh reasons lack :round-corrected-by-source"))))
 
+;; 10. v2 fetch-status admission: the contract must declare the rule,
+;;     a non-ok receipt must back no observation, and an event citing
+;;     ONLY a non-ok receipt must surface :fetch-status-non-ok and be
+;;     :unmeasured — never silently admitted. Negative check: a v1-shaped
+;;     contract (no admission rule) must fail here.
+(defn fixture-fetch-status-admission []
+  (let [adm (get contract :receipt-admission)]
+    (when-not (= :fetch-status-ok-required (:rule adm))
+      (fail! :fetch-status-admission "contract lacks :fetch-status-ok-required rule"))
+    (when-not (false? (get-in adm [:else :backs-observation?]))
+      (fail! :fetch-status-admission "non-ok receipt must not back an observation"))
+    (when-not (= :fetch-status-non-ok (get-in adm [:else :missingness-flag]))
+      (fail! :fetch-status-admission "admission else-branch lacks :fetch-status-non-ok flag"))
+    (when-not (contains? (get-in contract [:missingness :flags]) :fetch-status-non-ok)
+      (fail! :fetch-status-admission "missingness flags lack :fetch-status-non-ok"))
+    ;; deterministic data-level check: the non-ok receipt r-3
+    (let [r3 (first (filter #(= "r-3" (:receipt-id %)) receipts))]
+      (when-not (= 404 (:fetch-status r3))
+        (fail! :fetch-status-admission "fixture receipt r-3 is not non-ok"))
+      (when (contains? (get-in contract [:receipt-admission :admissible-status])
+                       (:fetch-status r3))
+        (fail! :fetch-status-admission "404 is treated as admissible")))))
+
+;; 11. v2 event-level provenance: every event schema carries
+;;     :provenance-chain, the rule is required, and an event citing a
+;;     missing receipt id is :provenance-chain-incomplete.
+(defn fixture-event-provenance []
+  (let [evprov (get contract :event-provenance)
+        schema (set (get-in contract [:event-record :schema]))]
+    (when-not (true? (:required? evprov))
+      (fail! :event-provenance "event provenance is not required"))
+    (when-not (= :every-event-cites-existing-receipts (:rule evprov))
+      (fail! :event-provenance "event provenance rule missing"))
+    (when-not (contains? schema :provenance-chain)
+      (fail! :event-provenance "event schema lacks :provenance-chain"))
+    (when-not (contains? (get-in contract [:missingness :flags])
+                         :provenance-chain-incomplete)
+      (fail! :event-provenance "missingness flags lack :provenance-chain-incomplete"))
+    ;; data-level: an event whose chain cites a non-existent receipt
+    (let [bad-chain ["r-1" "r-nope"]
+          receipt-ids (set (map :receipt-id receipts))]
+      (when-not (some #(not (contains? receipt-ids %)) bad-chain)
+        (fail! :event-provenance "broken chain not detected in fixture")))
+    ;; every fixture event's own chain must resolve
+    (let [receipt-ids (set (map :receipt-id receipts))]
+      (doseq [ev events]
+        (doseq [rid (:provenance-chain ev)]
+          (when-not (contains? receipt-ids rid)
+            (fail! :event-provenance
+                   (str "event " (:event-id ev) " cites missing receipt " rid))))))))
+
+;; 12. v2 receipt disagreement: two admissible receipts disagreeing on
+;;     the same round produce a :receipt-disagreement observation with
+;;     value :unmeasured and ALL conflicting receipt ids in the chain —
+;;     and the contract declares no winner-picking mechanism.
+(defn fixture-receipt-disagreement []
+  (let [rd (get contract :receipt-disagreement)]
+    (when-not (= :recorded-never-resolved (:rule rd))
+      (fail! :receipt-disagreement "contract lacks recorded-never-resolved rule"))
+    (when-not (= :unmeasured (:result-value rd))
+      (fail! :receipt-disagreement "disagreement result must be :unmeasured"))
+    (when-not (= :all-conflicting-receipt-ids (:provenance rd))
+      (fail! :receipt-disagreement "disagreement chain must carry ALL conflicting receipt ids"))
+    (when-not (contains? (get-in contract [:missingness :flags]) :receipt-disagreement)
+      (fail! :receipt-disagreement "missingness flags lack :receipt-disagreement"))
+    ;; no resolution mechanism anywhere in the contract
+    (let [contract-str (pr-str contract)]
+      (when (re-find #":pick-winner|:resolve-disagreement|:authoritative-source-wins" contract-str)
+        (fail! :receipt-disagreement "contract declares a winner-picking mechanism")))
+    ;; data-level: r-1 (company) and r-4 (investor) both admissible,
+    ;; both state amounts — they disagree on the value for one round.
+    (let [r1 (first (filter #(= "r-1" (:receipt-id %)) receipts))
+          r4 (first (filter #(= "r-4" (:receipt-id %)) receipts))
+          admissible (get-in contract [:receipt-admission :admissible-status])]
+      (when-not (and (contains? admissible (:fetch-status r1))
+                     (contains? admissible (:fetch-status r4)))
+        (fail! :receipt-disagreement "fixture disagreement receipts are not both admissible"))
+      (when (= (:content-hash r1) (:content-hash r4))
+        (fail! :receipt-disagreement "disagreement fixture receipts share a content hash")))))
+
+
 (def fixtures
   [[:entity-separation fixture-entity-separation]
    [:provenance fixture-provenance]
@@ -230,7 +323,10 @@
    [:amount-kinds fixture-amount-kinds]
    [:derived-safety fixture-derived-safety]
    [:query-readback fixture-query-readback]
-   [:refresh-history fixture-refresh-history]])
+   [:refresh-history fixture-refresh-history]
+   [:fetch-status-admission fixture-fetch-status-admission]
+   [:event-provenance fixture-event-provenance]
+   [:receipt-disagreement fixture-receipt-disagreement]])
 
 (defn -main [& _]
   (doseq [[name f] fixtures]

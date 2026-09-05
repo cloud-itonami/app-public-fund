@@ -323,6 +323,23 @@ epistemic boundaries enforced by construction:
 nbb tools/financing_round_fixtures.cljs
 ```
 
+v2 additions (2026-09-03):
+
+- **Fetch-status admission**: `:receipt-admission` declares
+  `:fetch-status-ok-required`. A receipt whose fetch was not `:ok` is
+  still recorded but backs no observation and flags
+  `:fetch-status-non-ok`.
+- **Event-level provenance**: every event carries a `:provenance-chain`
+  of receipt ids that must all exist; a broken chain is
+  `:provenance-chain-incomplete` (unmeasured, never inferred).
+- **Receipt disagreement is recorded, never resolved**: two admissible
+  receipts stating different facts about the same round yield a
+  `:receipt-disagreement` observation with value `:unmeasured` and ALL
+  conflicting receipt ids in its chain. The contract declares no
+  winner-picking mechanism.
+- Fixture runner extended to 12 fixtures (3 new), with a negative check:
+  run against the v1 contract it reports 13 failures and exits 1.
+
 What these are not:
 
 - Not a score or ranking. Not investment advice, ownership, endorsement or
