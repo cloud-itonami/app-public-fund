@@ -651,3 +651,22 @@ value V as of time T" — as first-party or registry/securities-filing-backed,
   `:carry-both-never-resolve`, append-only refresh history, no
   rank/score/allocation/portfolio-composition/returns/health/
 nbb tools/fund_investment_focus_fixtures.cljs
+## Fund term and vintage observation contract (`fund-term-and-vintage-observation.edn`)
+`fund-term-and-vintage-observation.edn` is a bounded actor contract for
+observing **stated fund lifecycle dates** — "source S stated that fund
+vehicle F has lifecycle date D of kind K as of time T" — as first-party
+or registry/securities-filing-backed, hash-backed claims, proposed to
+Hyakka as auditable questions.
+- A stated date is the source's own statement. It is **not** an actual
+  or verified lifecycle event, a performance measure, an endorsement or
+  a suitability signal (`stated-date-is-not-actual-event`).
+- Date kinds are carried separately and are never collapsed
+  (`date-kinds-carried-not-collapsed`): a stated first-close date is not
+  a final-close date, a stated term end is not an actual liquidation,
+  and a vintage year is not a first-deployment date.
+- An extension announcement is an **amendment**: a new
+  `:extension-announced` observation plus a history entry. The earlier
+  stated term end is never overwritten or deleted
+  (`extension-appends-does-not-overwrite`).
+  rank/score/returns/TVPI/DPI/deployment-pace/dry-powder/fund-health/
+nbb tools/fund_term_vintage_fixtures.cljs
