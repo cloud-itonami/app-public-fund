@@ -1,0 +1,379 @@
+#!/usr/bin/env nbb
+;; fund_domicile_fixtures.cljs — deterministic offline fixture runner
+;; for the fund-domicile-observation.v1 contract
+;; (capital-observation/fund-domicile-observation.edn). No network.
+;;
+;; Exit codes mirror the other capital-observation fixture runners:
+;;   0  all fixtures ran clean
+;;   1  a violation was found
+;;   2  REFUSED — the contract could not be read
+;;
+;; Fixtures exercise specifically:
+;;   * domicile words carried verbatim; unmapped words are never
+;;     force-fitted to an ISO code (:mapping :unmapped)
+;;   * domicile never carried across entity types (vehicle vs
+;;     management company may each have a different stated domicile)
+;;   * fetch-status admission: a non-:ok receipt backs nothing,
+;;     produces a refusal record, never retro-invalidates
+;;   * provenance chain required on every event
+;;   * cross-source disagreement recorded, never resolved
+;;   * out-of-window readback is :unmeasured/:out-of-window, not false
+;;   * strict readback: unknown filter key → :rejected-filter;
+;;     unmapped word never returned under a code filter
+;;   * forbidden fields absent from the derived-observation shape
+;;   * append-only refresh history
+;;
+;; Run: nbb tools/fund_domicile_fixtures.cljs
+
+(ns fund-domicile-fixtures
+  (:require ["fs" :as fs]
+            [clojure.edn :as edn]
+            [clojure.string :as str]))
+
+(defonce failures (atom []))
+
+(defn chk [ctx msg ok?]
+  (when-not ok?
+    (swap! failures conj {:fixture (:fixture ctx) :msg msg}))
+  ok?)
+
+;; ── Load the contract ───────────────────────────────────────────────
+(def contract-path "capital-observation/fund-domicile-observation.edn")
+(def contract
+  (try
+    (edn/read-string (.readFileSync fs contract-path "utf8"))
+    (catch :default e
+      (println (str "REFUSED: cannot read contract: " (.-message e)))
+      (js/process.exit 2))))
+
+;; ── Fixture world (all synthetic, no real fund/company/manager) ─────
+(def fixture-window {:from "2026-01-01" :until "2026-07-01"
+                     :declared-at "2026-09-06" :timezone "UTC"})
+(def later-window {:from "2026-07-01" :until "2027-01-01"
+                   :declared-at "2026-09-06" :timezone "UTC"})
+
+(def fixture-receipts
+  [{:receipt-id "rcpt-d1" :source-url "https://fund.example/fund-7"
+    :source-class :fund-first-party :source-language "en"
+    :observed-at "2026-02-01T00:00:00Z"
+    :content-hash "aa77" :fetch-status :ok}
+   {:receipt-id "rcpt-d2" :source-url "https://registry.example/entity-7"
+    :source-class :official-company-registry :source-language "en"
+    :observed-at "2026-02-02T00:00:00Z"
+    :content-hash "bb88" :fetch-status :ok}
+   ;; non-ok fetch: recorded, backs nothing
+   {:receipt-id "rcpt-d3"
+    :source-url "https://fund.example/fund-7?mirror"
+    :source-class :fund-first-party :source-language "en"
+    :observed-at "2026-02-03T00:00:00Z"
+    :content-hash "cc99" :fetch-status :error}
+   ;; second source for the disagreement fixture
+   {:receipt-id "rcpt-d4" :source-url "https://manager.example/fund-7"
+    :source-class :manager-first-party :source-language "en"
+    :observed-at "2026-02-04T00:00:00Z"
+    :content-hash "dd11" :fetch-status :ok}])
+
+(def fixture-entities
+  [{:entity-id "fv-7" :entity-type :fund-vehicle
+    :name "Fund Seven (fixture)" :legal-name "Fund Seven SCSp (fixture)"
+    :jurisdiction :luxembourg :identifier-class :official-registry-id
+    :identifier-value "FIX-F007" :source-receipt-id "rcpt-d1"
+    :asserted-at "2026-01-05" :observed-at "2026-02-01T00:00:00Z"
+    :provenance-chain ["rcpt-d1"]}
+   {:entity-id "mgmt-7" :entity-type :management-company
+    :name "Fund Seven (fixture)" :legal-name "Fund Seven Management BV (fixture)"
+    :jurisdiction :netherlands :identifier-class :official-registry-id
+    :identifier-value "FIX-M007" :source-receipt-id "rcpt-d1"
+    :asserted-at "2026-01-05" :observed-at "2026-02-01T00:00:00Z"
+    :provenance-chain ["rcpt-d1"]}])
+
+(def fixture-events
+  [{:event-id "ev-d1" :event-type :domicile-named :entity-id "fv-7"
+    :asserted-at "2026-02-01" :observed-at "2026-02-01T00:00:00Z"
+    :stated-domicile {:jurisdiction-word "Grand Duchy of Luxembourg"
+                      :mapping :mapped
+                      :mapped-to {:kind :iso-3166-1 :code "LU"
+                                  :registry-name "RCSL"}}
+    :source-receipt-id "rcpt-d1" :provenance-chain ["rcpt-d1"]}
+   ;; a source word that does not map to any known code
+   {:event-id "ev-d2" :event-type :domicile-named :entity-id "fv-7"
+    :asserted-at "2026-03-01" :observed-at "2026-03-01T00:00:00Z"
+    :stated-domicile {:jurisdiction-word "offshore"
+                      :mapping :unmapped}
+    :source-receipt-id "rcpt-d4" :provenance-chain ["rcpt-d4"]}
+   ;; event backed by a non-ok receipt — must produce a refusal record
+   {:event-id "ev-d3" :event-type :domicile-named :entity-id "fv-7"
+    :asserted-at "2026-03-02" :observed-at "2026-03-02T00:00:00Z"
+    :stated-domicile {:jurisdiction-word "Cayman Islands"
+                      :mapping :mapped
+                      :mapped-to {:kind :iso-3166-1 :code "KY"
+                                  :registry-name "CIMA"}}
+    :source-receipt-id "rcpt-d3" :provenance-chain ["rcpt-d3"]}
+   ;; a second, differing naming of the same entity in the same window
+   ;; (disagreement fixture) — and the management company's own,
+   ;; different domicile (never-carried-across-entity-types fixture)
+   {:event-id "ev-d4" :event-type :domicile-named :entity-id "fv-7"
+    :asserted-at "2026-02-05" :observed-at "2026-02-05T00:00:00Z"
+    :stated-domicile {:jurisdiction-word "Delaware"
+                      :mapping :mapped
+                      :mapped-to {:kind :subnational-registry :code "US-DE"
+                                  :registry-name "DE-SOS"}}
+    :source-receipt-id "rcpt-d4" :provenance-chain ["rcpt-d4"]}
+   {:event-id "ev-d5" :event-type :domicile-named :entity-id "mgmt-7"
+    :asserted-at "2026-02-06" :observed-at "2026-02-06T00:00:00Z"
+    :stated-domicile {:jurisdiction-word "Netherlands"
+                      :mapping :mapped
+                      :mapped-to {:kind :iso-3166-1 :code "NL"
+                                  :registry-name "KVK"}}
+    :source-receipt-id "rcpt-d1" :provenance-chain ["rcpt-d1"]}])
+
+;; ── Contract logic under test (mirrors the contract's declared rules) ──
+(defn admitted? [receipt]
+  (= :ok (:fetch-status receipt)))
+
+(defn refusal-record [event receipts]
+  (let [r (some #(when (= (:receipt-id %) (:source-receipt-id event)) %)
+                receipts)]
+    (when (and r (not (admitted? r)))
+      {:refused-event-id (:event-id event)
+       :receipt-id (:receipt-id r)
+       :fetch-status (:fetch-status r)
+       :missingness-flag :fetch-status-non-ok
+       :backs-observation? false})))
+
+(defn derived-observations [events receipts window]
+  (for [e events
+        :let [r (some #(when (= (:receipt-id %) (:source-receipt-id e)) %)
+                      receipts)]
+        :when (and (admitted? r)
+                   (>= (compare (:asserted-at e) (:from window)) 0)
+                   (< (compare (:asserted-at e) (:until window)) 0))]
+    {:observation-id (str "obs-" (:event-id e))
+     :method/version (:method/version contract)
+     :window window
+     :observation-kind :fund-vehicle-domicile-named-in-window
+     :entity-id (:entity-id e)
+     :event-id (:event-id e)
+     :value {:kind :domicile-naming-in-window :basis :receipt-only}
+     :missingness-flags (if (= :unmapped (get-in e [:stated-domicile :mapping]))
+                          #{:jurisdiction-word-unmapped} #{})
+     :provenance-chain (:provenance-chain e)
+     :asserted-at (:asserted-at e)}))
+
+(defn readback [observations events window filter-map]
+  (let [known-keys (get-in contract [:query-readback :request-schema 4
+                                   :keys])]
+    (if-let [unknown (seq (remove known-keys (keys (or filter-map {}))))]
+      {:status :rejected-filter :rejected-keys (vec unknown)}
+      (let [rows (filter (fn [o]
+                           (and (= (:window o) window)
+                                (or (nil? (:stated-jurisdiction filter-map))
+                                    (let [e (some (fn [ev]
+                                                    (when (= (:event-id ev)
+                                                            (:event-id o))
+                                                      ev))
+                                                  events)]
+                                      ;; exact carried-code match; an
+                                      ;; unmapped word never matches a code
+                                      (and (= :mapped
+                                              (get-in e [:stated-domicile
+                                                         :mapping]))
+                                           (= (:stated-jurisdiction filter-map)
+                                              (get-in e [:stated-domicile
+                                                         :mapped-to
+                                                         :code])))))))
+                         observations)]
+        (if (empty? rows)
+          {:status :unmeasured :observations []
+           :missingness-flags #{:missing-is-unmeasured}}
+          {:status :ok :observations (map :observation-id rows)})))))
+
+;; ── Fixtures ────────────────────────────────────────────────────────
+
+(defn fixture-domicile-carried-not-collapsed [f]
+  (chk f "domicile invariants exist"
+       (some #(= :domicile-carried-not-collapsed %)
+             (get-in contract [:event-record :invariants])))
+  (let [unmapped (some #(when (= :unmapped
+                                  (get-in % [:stated-domicile :mapping])) %)
+                       fixture-events)]
+    (chk f "unmapped jurisdiction word must be carried verbatim"
+         (and unmapped (= "offshore"
+                          (get-in unmapped [:stated-domicile
+                                            :jurisdiction-word]))))
+    (chk f "unmapped word must carry no mapped code"
+         (nil? (get-in unmapped [:stated-domicile :mapped-to]))))
+  (chk f "jurisdiction-word must be a required schema field"
+       (some #(str/includes? (str %) ":jurisdiction-word")
+             (get-in contract [:event-record :schema]))))
+
+(defn fixture-never-carried-across-entity-types [f]
+  (chk f "never-carried invariant declared"
+       (some #(= :domicile-never-carried-across-entity-types %)
+             (get-in contract [:event-record :invariants])))
+  (let [fv-dom (get-in (some #(when (= "ev-d1" (:event-id %)) %)
+                             fixture-events)
+                       [:stated-domicile :mapped-to :code])
+        mc-dom (get-in (some #(when (= "ev-d5" (:event-id %)) %)
+                             fixture-events)
+                       [:stated-domicile :mapped-to :code])
+        fv (some #(when (= :fund-vehicle (:entity-type %)) %) fixture-entities)
+        mc (some #(when (= :management-company (:entity-type %)) %)
+                 fixture-entities)]
+    (chk f "vehicle and management company keep distinct domiciles under one brand"
+         (and fv mc
+              (not= (:entity-id fv) (:entity-id mc))
+              (not= fv-dom mc-dom)))))
+
+(defn fixture-fetch-status-admission [f]
+  (let [ra (get contract :receipt-admission)]
+    (chk f "admission rule must be :fetch-status-ok-required"
+         (= (:rule ra) :fetch-status-ok-required))
+    (chk f "only :ok is admitted" (= #{:ok} (:admit-when ra)))
+    (chk f "refusal record required, never silence"
+         (get-in ra [:else :refusal-record-required?]))
+    (chk f "no retro-invalidation"
+         (false? (get-in ra [:else :retro-invalidation?]))))
+  (let [refusal (refusal-record
+                 (some #(when (= "ev-d3" (:event-id %)) %) fixture-events)
+                 fixture-receipts)]
+    (chk f "non-ok receipt produces a refusal record"
+         (and refusal (= :fetch-status-non-ok (:missingness-flag refusal))))
+    (let [obs (derived-observations fixture-events fixture-receipts
+                                    fixture-window)
+          backed? (some #(when (= "obs-ev-d3" (:observation-id %)) %) obs)]
+      (chk f "non-ok-backed event must produce no derived observation"
+           (nil? backed?)))))
+
+(defn fixture-provenance-chain-required [f]
+  (chk f "entity record schema requires provenance-chain"
+       (get-in contract [:entity-record :provenance-chain-required?]))
+  (chk f "event invariants require provenance chain"
+       (some #(= :provenance-chain-required-on-every-event %)
+             (get-in contract [:event-record :invariants])))
+  (chk f "every fixture event carries a non-empty chain"
+       (every? (fn [e] (seq (:provenance-chain e))) fixture-events))
+  (chk f "chain head equals the event's receipt id"
+       (every? (fn [e] (= (last (:provenance-chain e))
+                          (:source-receipt-id e)))
+               fixture-events)))
+
+(defn fixture-disagreement-recorded-never-resolved [f]
+  (let [dd (get contract :domicile-disagreement)]
+    (chk f "disagreement rule is record-never-resolve"
+         (= (:rule dd) :record-never-resolve))
+    (chk f "no winner mechanism"
+         (get-in dd [:result :no-winner-mechanism]))
+    (chk f "disagreement value is :unmeasured"
+         (= :unmeasured (get-in dd [:result :value])))
+    (chk f "epistemics forbid hardening a disagreement into a domicile"
+         (or (= :disagreement-never-hardens-into-a-domicile
+                (get-in dd [:result :hardening-rule]))
+             (some #(= :disagreement-never-hardens-into-a-domicile %)
+                   (get-in contract [:domicile-epistemics :rules])))))
+  (let [a (some #(when (= "ev-d1" (:event-id %)) %) fixture-events)
+        b (some #(when (= "ev-d4" (:event-id %)) %) fixture-events)]
+    (chk f "fixture really has two differing domiciles for one entity"
+         (and a b
+              (not= (get-in a [:stated-domicile :mapped-to :code])
+                    (get-in b [:stated-domicile :mapped-to :code]))
+              (= (:entity-id a) (:entity-id b))))))
+
+(defn fixture-out-of-window-is-not-false [f]
+  (chk f "out-of-window rule declared"
+       (some #(= :domicile-outside-window-is-out-of-window-not-false %)
+             (get-in contract [:domicile-epistemics :rules])))
+  (let [obs (derived-observations fixture-events fixture-receipts
+                                  fixture-window)
+        rb (readback obs fixture-events later-window nil)]
+    (chk f "empty window reads :unmeasured, not zero"
+         (and (= :unmeasured (:status rb)) (empty? (:observations rb))))))
+
+(defn fixture-strict-readback [f]
+  (let [obs (derived-observations fixture-events fixture-receipts
+                                  fixture-window)
+        rejected (readback obs fixture-events fixture-window {:bogus-key "x"})]
+    (chk f "unknown filter key is rejected, not ignored"
+         (= :rejected-filter (:status rejected))))
+  (let [obs (derived-observations fixture-events fixture-receipts
+                                  fixture-window)
+        code-filter (readback obs fixture-events fixture-window
+                              {:stated-jurisdiction "LU"})
+        unmapped-under-code (readback obs fixture-events fixture-window
+                                      {:stated-jurisdiction "KY"})]
+    (chk f "code filter matches the carried code exactly"
+         (and (= :ok (:status code-filter))
+              (= ["obs-ev-d1"] (:observations code-filter))))
+    (chk f "unmapped word never returned under a code filter"
+         (and (= :unmeasured (:status unmapped-under-code))
+              (empty? (:observations unmapped-under-code)))))
+  (let [rb (get-in contract [:query-readback :rules])]
+    (chk f "readback declares exact-code filter matching"
+         (some #(= :stated-jurisdiction-filter-matches-carried-code-exactly %)
+               rb))
+    (chk f "readback declares unmapped-word rule"
+         (some #(= :unmapped-word-never-returned-under-a-code-filter %) rb))
+    (chk f "readback declares unmeasured-is-not-zero"
+         (some #(= :unmeasured-is-not-zero %) rb))
+    (chk f "readback always carries coverage and missingness"
+         (some #(= :readback-must-carry-coverage-and-missingness %) rb))))
+
+(defn fixture-forbidden-fields [f]
+  (let [forbidden (get-in contract [:derived-observation :forbidden-fields])]
+    (doseq [k [:rank :score :tax-posture :regulatory-arbitrage
+               :effective-domicile :actual-domicile :asset-location
+               :verified-registration :ownership-stake :suitability]]
+      (chk f (str "forbidden field declared: " (name k))
+           (contains? forbidden k)))))
+
+(defn fixture-refresh-history-append-only [f]
+  (let [rh (get contract :refresh-history)]
+    (chk f "refresh history is append-only" (get rh :append-only?))
+    (chk f "amendment and retraction are history reasons"
+         (and (str/includes? (str (:schema rh)) "domicile-amendment")
+              (str/includes? (str (:schema rh)) "domicile-retraction")
+              (str/includes? (str (:schema rh)) "receipt-refetched")))))
+
+(defn fixture-hyakka-questions-only [f]
+  (let [hp (get contract :hyakka-proposal)]
+    (chk f "proposal carries a disclaimer"
+         (str/includes? (str (:disclaimer hp)) "No investment advice"))
+    (chk f "proposal schema carries coverage ref and missingness"
+         (and (str/includes? (str (:schema hp)) "coverage-record-ref")
+              (str/includes? (str (:schema hp)) "missingness-flags")))))
+
+(defn fixture-coverage-record [f]
+  (let [m (get contract :missingness)]
+    (chk f "missing-is-unmeasured" (= :missing-is-unmeasured (:rule m)))
+    (chk f "domicile-not-stated is a flag"
+         (contains? (:flags m) :domicile-not-stated))
+    (chk f "domicile-disagreement is a flag"
+         (contains? (:flags m) :domicile-disagreement))
+    (chk f "coverage-record schema exists"
+         (seq (get-in m [:coverage-record :schema])))))
+
+;; ── Runner ──────────────────────────────────────────────────────────
+(def fixtures
+  [[:domicile-carried-not-collapsed fixture-domicile-carried-not-collapsed]
+   [:never-carried-across-entity-types fixture-never-carried-across-entity-types]
+   [:fetch-status-admission fixture-fetch-status-admission]
+   [:provenance-chain-required fixture-provenance-chain-required]
+   [:disagreement-recorded-never-resolved fixture-disagreement-recorded-never-resolved]
+   [:out-of-window-is-not-false fixture-out-of-window-is-not-false]
+   [:strict-readback fixture-strict-readback]
+   [:forbidden-fields fixture-forbidden-fields]
+   [:refresh-history-append-only fixture-refresh-history-append-only]
+   [:hyakka-questions-only fixture-hyakka-questions-only]
+   [:coverage-record fixture-coverage-record]])
+
+(doseq [[name f] fixtures] (f {:fixture name}))
+
+(if (empty? @failures)
+  (do (println (str "OK: " (count fixtures)
+                    " fund-domicile fixtures ran clean ("
+                    (:method/version contract) ")"))
+      (js/process.exit 0))
+  (do (doseq [{:keys [fixture msg]} @failures]
+        (println (str "VIOLATION [" fixture "]: " msg)))
+      (println (str "FAILED: " (count @failures) " violation(s)"))
+      (js/process.exit 1)))

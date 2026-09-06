@@ -1,0 +1,220 @@
+;; fund-domicile-observation.edn — bounded actor contract for observing
+;; **stated fund-vehicle domicile/jurisdiction namings** — "source S
+;; named fund vehicle F as having domicile/jurisdiction J (e.g. a
+;; Delaware LP, a Cayman exempted company, a Luxembourg SCSp) as of
+;; time T" — as first-party or registry/filing-backed, hash-backed
+;; claims, proposed to Hyakka (network-awai/app-hyakka) as auditable
+;; questions, not as a score.
+;;
+;; Scope guard: this contract observes the *stated domicile naming*
+;; plane only. It does NOT rank funds, GPs, LPs or startups, does not
+;; infer tax posture, regulatory arbitrage, ownership, or asset
+;; location from a domicile naming, and produces no investment advice.
+;; A domicile naming is the source's own statement about its own
+;; vehicle; it is not a verified registration, a tax determination,
+;; or a regulatory finding. Verifying a domicile is the job of an
+;; official-company-registry receipt, not of this contract's naming
+;; plane — the two are never collapsed.
+;;
+;; Entity separation is the epistemic core: a fund vehicle, its
+;; management company and its general partner are distinct entities
+;; even under one brand (brand-is-not-legal-entity), and each may have
+;; a DIFFERENT stated domicile. A vehicle's Cayman naming is never
+;; carried onto its Delaware management company or vice versa
+;; (:domicile-never-carried-across-entity-types).
+;;
+;; Method version: v1 (2026-09-06). Companion to
+;; fund-vehicle-status-observation (a status is not a domicile) and to
+;; regulator-registration-observation (a stated domicile naming is not
+;; a registration record). Any change to field semantics bumps
+;; :method/version and appends a :refresh/history entry; old
+;; observations are never silently reinterpreted.
+
+{:contract/id :fund-domicile-observation
+ :contract/version "1.0.0"
+ :method/version "fund-domicile-observation.v1"
+ :actor :cloud-itonami/app-public-fund
+ :proposes-to :network-awai/app-hyakka
+
+ ;; ── Measurement window ─────────────────────────────────────────────
+ ;; Half-open interval [from, until) in UTC ISO-8601 dates. "missing"
+ ;; inside a window means "not measured in this window", never
+ ;; "nothing was stated".
+ :window
+ {:schema [:from :until :declared-at :timezone]
+  :format "YYYY-MM-DD"
+  :closed? false
+  :rule :window-must-not-overlap-within-same-source-and-method}
+
+ ;; ── Source receipts ────────────────────────────────────────────────
+ ;; Every observation cites exactly one receipt, captured verbatim
+ ;; (bytes hash + fetch metadata) before any parsing.
+ :source-receipt
+ {:schema [:receipt-id :source-url :source-class :source-language
+           :observed-at :content-hash :fetch-status]
+  :content-hash {:algo "sha256" :of "response-body-bytes"}
+  :fetch-status-vocabulary #{:ok :error :redirected :not-modified
+                             :robots-disallowed :auth-required}
+  :source-class-allow #{:fund-first-party :manager-first-party
+                        :official-regulator :official-stock-exchange-filing
+                        :official-company-registry}
+  :source-class-forbid #{:search-snippet :generated-summary :scraped-directory
+                         :social-post :broker-list :paywall-bypass
+                         :captcha-bypass}
+  ;; discovery-only pointers never back a derived observation:
+  :source-class-discovery-only #{:news-report :licensed-commercial-aggregator}
+  :fetch {:respect-robots? true :respect-auth-waf-captcha? true
+          :user-agent "app-public-fund-capital-observation/1.0"}}
+
+ ;; ── Fetch-status admission ─────────────────────────────────────────
+ ;; A receipt whose fetch was not fully :ok backs no entity, event or
+ ;; derived observation. A refused admission produces a refusal record
+ ;; (never silence) and never retro-invalidates earlier observations.
+ :receipt-admission
+ {:rule :fetch-status-ok-required
+  :admit-when #{:ok}
+  :else {:missingness-flag :fetch-status-non-ok
+         :backs-observation? false
+         :refusal-record-required? true
+         :retro-invalidation? false}}
+
+ ;; ── Typed entity/event inputs ──────────────────────────────────────
+ :entity-types #{:fund-vehicle :management-company :general-partner
+                 :limited-partner :jurisdiction}
+ :event-types #{:domicile-named :domicile-amendment-announced
+                :domicile-retracted}
+ :entity-record
+ {:schema [:entity-id :entity-type :name :legal-name :jurisdiction
+           :identifier-class :identifier-value :source-receipt-id
+           :asserted-at :observed-at :provenance-chain]
+  :invariant :one-entity-type-per-entity-id
+  :identifier-invariant [:identifier-value-unique-across-entity-types
+                         :one-identifier-per-entity-id]
+  :provenance-chain-required? true
+  :note "A brand string never auto-creates a legal entity."}
+ :event-record
+ {:schema [:event-id :event-type :entity-id :asserted-at :observed-at
+           :stated-domicile {:jurisdiction-word :string  ; verbatim source wording
+                             :mapping [:one-of :mapped :unmapped]
+                             :mapped-to {:kind [:one-of :iso-3166-1 :iso-3166-2
+                                          :subnational-registry :other-registry]
+                                         :code :string         ; only when :mapped
+                                         :registry-name :string}}
+           :source-receipt-id
+           :provenance-chain]
+  ;; domicile-carried-not-collapsed: a source's free-text domicile word
+  ;; is carried verbatim; an unmapped word is carried with
+  ;; :mapping :unmapped — never force-fitted to an ISO code, and a
+  ;; mapped code is never silently changed when wording changes (a new
+  ;; naming appends a new event).
+  :invariants [:domicile-carried-not-collapsed
+               :domicile-never-carried-across-entity-types
+               :provenance-chain-required-on-every-event
+               :domicile-is-naming-not-verified-registration]}
+
+ ;; ── Domicile naming is not a registration or tax fact ──────────────
+ ;; Bound to its receipt and window; outside the window the readback
+ ;; answers :out-of-window — never "still domiciled there", never "no
+ ;; longer". Later namings append; earlier ones are never overwritten,
+ ;; deleted, or reinterpreted in hindsight.
+ :domicile-epistemics
+ {:rules [:naming-is-not-verified-registration-or-tax-posture
+          :naming-is-not-endorsement-or-suitability-fact
+          :domicile-outside-window-is-out-of-window-not-false
+          :later-naming-appends-never-overwrites
+          :one-source-naming-plus-another-source-silence-is-not-conflict]}
+
+ ;; ── Cross-source disagreement ──────────────────────────────────────
+ ;; Two allowed sources naming different domiciles for the same
+ ;; (entity, window) produce a conflict observation with ALL competing
+ ;; receipt ids and value :unmeasured. Resolution is always
+ ;; :carry-both-never-resolve — a disagreement never hardens into a
+ ;; "current domicile" claim.
+ :domicile-disagreement
+ {:rule :record-never-resolve
+  :applies-when [:two-or-more-allow-class-receipts :same-entity-id
+                 :same-window :differing-stated-domicile]
+  :result {:missingness-flag :domicile-disagreement
+           :provenance-chain :all-conflicting-receipt-ids
+           :value :unmeasured
+           :no-winner-mechanism true
+           :hardening-rule :disagreement-never-hardens-into-a-domicile}}
+
+ ;; ── Missingness / coverage flags ───────────────────────────────────
+ :missingness
+ {:flags #{:no-receipt :receipt-unparseable :domicile-not-stated
+           :jurisdiction-word-unmapped :jurisdiction-unstated
+           :source-language-unmapped :fetch-status-non-ok
+           :identifier-unstated :provenance-chain-incomplete
+           :domicile-disagreement}
+  :rule :missing-is-unmeasured
+  :coverage-unit [:jurisdiction :source :language :year :stage
+                  :identifier-class]
+  :coverage-record
+  {:schema [:coverage-unit :unit-key :observed-count :unmeasured-count
+            :window :method/version]}}
+
+ ;; ── Derived observation ────────────────────────────────────────────
+ ;; The only derived artifact is an observation of domicile namings
+ ;; within a window. No ranking, scoring, tax, arbitrage, ownership or
+ ;; suitability field exists in this shape by construction.
+ :derived-observation
+ {:schema [:observation-id :method/version :window
+           :observation-kind :entity-id :event-id
+           :value {:kind [:one-of :domicile-naming-in-window
+                    :domicile-amendment-in-window
+                    :domicile-retraction-in-window]
+                   :basis #{:receipt-only}}
+           :missingness-flags :provenance-chain
+           :asserted-at]
+  :observation-kinds #{:fund-vehicle-domicile-named-in-window}
+  :forbidden-fields #{:rank :score :centrality :nav :ownership-stake
+                      :suitability :recommendation :current-valuation
+                      :tax-posture :regulatory-arbitrage
+                      :effective-domicile :actual-domicile
+                      :asset-location :verified-registration}}
+
+ ;; ── Refresh history ────────────────────────────────────────────────
+ ;; Append-only. A domicile amendment, retraction, re-fetch or method
+ ;; bump appends a new event plus a history entry; prior observations
+ ;; are never edited or deleted.
+ :refresh-history
+ {:schema [:history-id :observation-id :re-observed-at
+           :reason {:kind [:one-of :window-advanced :source-updated
+                     :domicile-amendment :domicile-retraction
+                     :receipt-refetched :method-version-bumped]}]
+  :append-only? true}
+
+ ;; ── Hyakka proposal ────────────────────────────────────────────────
+ ;; Auditable QUESTIONS over observation records, e.g. "how many
+ ;; fund-vehicle domicile namings with jurisdiction word W did source S
+ ;; issue in window W?" — each question carries its own
+ ;; coverage/missingness statement.
+ :hyakka-proposal
+ {:schema [:proposal-id :question-text :over-observation-kind
+           :window :coverage-record-ref :missingness-flags
+           :disclaimer]
+  :disclaimer
+  "Observations only. Not performance, ownership, endorsement, domicile verification or investment suitability. No investment advice."}
+
+ ;; ── Query / readback shape ─────────────────────────────────────────
+ ;; Deterministic readback. Unknown filter keys are rejected
+ ;; (:rejected-filter), never silently ignored. A :stated-jurisdiction
+ ;; filter matches the carried mapping/code exactly — a :unmapped
+ ;; naming is never returned under a mapped-code filter, and one code
+ ;; is never returned under another (codes never collapse in readback).
+ ;; Unavailable sources answer :unmeasured, not zero.
+ :query-readback
+ {:request-schema [:query-id :observation-kind :window
+                   :filter {:keys #{:jurisdiction :entity-type
+                                    :stated-jurisdiction}}]
+  :response-schema [:query-id :status
+                    :observations [:observation-id]
+                    :coverage-record-ref
+                    :missingness-flags]
+  :status-values #{:ok :unmeasured :out-of-window :rejected-filter}
+  :rules [:unknown-filter-key-is-rejected-not-ignored
+          :stated-jurisdiction-filter-matches-carried-code-exactly
+          :unmapped-word-never-returned-under-a-code-filter
+          :unmeasured-is-not-zero
+          :readback-must-carry-coverage-and-missingness]}}
