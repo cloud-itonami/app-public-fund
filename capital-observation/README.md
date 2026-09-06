@@ -734,8 +734,22 @@ Hyakka as auditable questions.
   `:extension-announced` observation plus a history entry. The earlier
   stated term end is never overwritten or deleted
   (`extension-appends-does-not-overwrite`).
-  rank/score/returns/TVPI/DPI/deployment-pace/dry-powder/fund-health/
-nbb tools/fund_term_vintage_fixtures.cljs
+- Same guarantees as the other contracts: sha256-backed verbatim
+  receipts, `fetch-status :ok` admission, hard entity separation (fund
+  vehicle, management company and GP stay distinct even when they share
+  a brand), half-open time-bounded windows, missingness flags
+  (`missing-is-unmeasured`), cross-source disagreement carried as
+  `:conflict-observation` with `:carry-both-never-resolve`, append-only
+  refresh history, no rank/score/returns/TVPI/DPI/deployment-pace/
+  dry-powder/fund-health/ownership/suitability fields by construction,
+  questions-only Hyakka proposal, and a deterministic readback that
+  always carries coverage + missingness.
+
+Verify deterministically (offline, no network):
+
+```bash
+nbb tools/fund_term_vintage_fixtures.cljs   # 12 fixtures (v1)
+```
 ## Valuation estimate observation contract (`valuation-estimate-observation.edn`)
 `valuation-estimate-observation.edn` is a bounded actor contract for
 observing **publicly stated valuation estimates and valuation claims** —
