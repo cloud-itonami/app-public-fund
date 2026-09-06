@@ -4,6 +4,20 @@ Bounded actor contracts in this directory observe public capital-market
 surface with provenance, and propose results to `network-awai/app-hyakka`
 as auditable questions — never as scores, rankings or advice.
 
+## fund-domicile-observation.edn
+
+- Bounded v1 contract (2026-09-06) that observes **stated fund-vehicle
+  domicile/jurisdiction namings** — "source S named fund vehicle F as
+  having jurisdiction J as of time T" — with verbatim source words
+  carried (unmapped words are never force-fitted to an ISO code),
+  domicile never carried across entity types (a vehicle's Cayman
+  naming is not its Delaware management company's), fetch-status
+  admission, provenance chains on every event, disagreement recorded
+  never resolved, and strict readback (unmapped word never returned
+  under a code filter). A stated naming is not a verified registration
+  or tax posture. Fixtures: `nbb tools/fund_domicile_fixtures.cljs`.
+
+
 ## listing-pace-observation.edn
 
 - Compositional v1 contract (2026-09-03) that re-counts events already
