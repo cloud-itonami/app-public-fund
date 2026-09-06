@@ -1,6 +1,6 @@
 #!/usr/bin/env nbb
 ;; professional_role_observation_fixtures.cljs — deterministic offline
-;; fixture runner for the professional-role-observation.v1 contract
+;; fixture runner for the professional-role-observation.v2 contract
 ;; (capital-observation/professional-role-observation.edn). No network.
 ;;
 ;; Exit codes mirror the other capital-observation fixture runners:
@@ -18,7 +18,7 @@
 ;;   * cross-source disagreement recorded, never resolved; a conflict
 ;;     never hardens into a role or a fitness claim
 ;;   * out-of-window readback is :unmeasured/:out-of-window, not false
-;;   * strict readback: unknown filter key -> :rejected-filter;
+;;   * strict readback: :rejected-filter is a first-class status-value;
 ;;     :role-unstated never returned under a role-kind filter
 ;;   * forbidden personal fields absent from the derived-observation shape
 ;;   * append-only refresh history; role change appends, never overwrites
@@ -260,7 +260,8 @@
   (let [ra (get contract :receipt-admission)]
     (chk f "admission rule must be :fetch-status-ok-required"
          (= :fetch-status-ok-required (:rule ra)))
-    (chk f "only :ok is admitted" (= #{:ok} (:admissible-status ra)))
+    (chk f "only :ok is admitted via canonical :admit-when"
+         (= #{:ok} (:admit-when ra)))
     (chk f "refusal record required, never silence"
          (get-in ra [:else :refusal-record-required?]))
     (chk f "no retro-invalidation"
@@ -348,7 +349,12 @@
     (chk f "unstated role never returned under a role-kind filter"
          (and (= :unmeasured (:status unstated))
               (empty? (:observations unstated)))))
-  (let [rules-set (set (get-in contract [:query-readback :rules]))]
+  (let [rules-set (set (get-in contract [:query-readback :rules]))
+        status-values (get-in contract [:query-readback :status-values])]
+    (chk f ":rejected-filter is a first-class readback status-value"
+         (contains? status-values :rejected-filter))
+    (chk f "readback declares unknown-filter-key rejection rule"
+         (contains? rules-set :unknown-filter-key-is-rejected-not-ignored))
     (chk f "readback declares exact role-kind matching"
          (contains? rules-set :role-kind-filter-matches-carried-role-exactly))
     (chk f "readback declares unstated-role rule"
