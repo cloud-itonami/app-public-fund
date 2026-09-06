@@ -25,13 +25,19 @@
 ;; returns or repudiation, and produces no investment advice. Every
 ;; derived observation traces back to a source receipt by hash.
 ;;
-;; Method version: v1 (2026-09-06). Any change to field semantics bumps
-;; :method/version and appends a :refresh/history entry; old
-;; observations are never silently reinterpreted.
+;; Method version: v2 (2026-09-07). v2 hardens the readback and
+;; admission planes to the canonical shape all other capital-observation
+;; kinds carry: strict readback now declares :rejected-filter as a
+;; first-class status-value (an unknown filter key is refused, never
+;; silently ignored -- exactly what the fixture runner already exercised),
+;; and the receipt-admission gate uses the canonical :admit-when #{:ok}
+;; shape. Any change to field semantics bumps :method/version and appends
+;; a :refresh/history entry; old observations are never silently
+;; reinterpreted.
 
 {:contract/id :professional-role-observation
- :contract/version "1.0.0"
- :method/version "professional-role-observation.v1"
+ :contract/version "2.0.0"
+ :method/version "professional-role-observation.v2"
  :actor :cloud-itonami/app-public-fund
  :proposes-to :network-awai/app-hyakka
 
@@ -72,7 +78,7 @@
  ;; is flagged and excluded from the derived-observation basis.
  :receipt-admission
  {:rule :fetch-status-ok-required
-  :admissible-status #{:ok}
+  :admit-when #{:ok}
   :else {:missingness-flag :fetch-status-non-ok
          :refusal-record-required? true
          :retro-invalidation? false
@@ -260,9 +266,10 @@
                     :observations [:observation-id]
                     :coverage-record-ref
                     :missingness-flags]
-  :status-values #{:ok :unmeasured :out-of-window}
+  :status-values #{:ok :unmeasured :out-of-window :rejected-filter}
   :rule :readback-must-carry-coverage-and-missingness
-  :rules #{:role-kind-filter-matches-carried-role-exactly
+  :rules #{:unknown-filter-key-is-rejected-not-ignored
+           :role-kind-filter-matches-carried-role-exactly
            :unstated-role-never-returned-under-a-role-filter
            :unmeasured-is-not-zero
            :readback-must-carry-coverage-and-missingness}}}

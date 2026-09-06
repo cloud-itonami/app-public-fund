@@ -843,8 +843,8 @@ nbb tools/fund_vehicle_status_fixtures.cljs   # 11 fixtures
 
 ## Professional-role observation contract (`professional-role-observation.edn`)
 
-`professional-role-observation.edn` (`professional-role-observation.v1`,
-2026-09-06) is a bounded actor contract for observing **publicly stated
+`professional-role-observation.edn` (`professional-role-observation.v2`,
+2026-09-07) is a bounded actor contract for observing **publicly stated
 professional roles** -- "source S stated that the professional holder of
 public registration id R holds professional role P at organization O at
 time T" (fund-manager, general-partner, chief-compliance-officer,
@@ -899,6 +899,19 @@ proposed to Hyakka as auditable questions.
   suitability or employment claim
   (`conflict-never-resolves-into-fitness-or-suitability`,
   `disagreement-never-hardens-into-a-role`, `role-is-not-a-person-profile`).
+
+v2 additions (2026-09-07) -- the serving-plane and admission shapes
+are hardened to the canonical shape every other capital-observation
+contract carries:
+
+- **Strict readback declared, not just exercised**: `:rejected-filter`
+  is now a first-class `:status-values` member (an unknown filter key is
+  refused, never silently ignored). The earlier fixture runner already
+  asserted this behaviour; the contract now declares it in its response
+  vocabulary.
+- **Canonical admission key**: the receipt-admission gate uses
+  `:admit-when #{:ok}` (was the non-canonical `:admissible-status`),
+  matching the other observation kinds exactly.
 
 Verify deterministically (offline, no network):
 
