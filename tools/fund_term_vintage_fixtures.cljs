@@ -1,0 +1,409 @@
+#!/usr/bin/env nbb
+;; fund_term_vintage_fixtures.cljs — deterministic offline fixture runner
+;; for the fund-term-and-vintage-observation.v1 contract
+;; (capital-observation/fund-term-and-vintage-observation.edn). No network.
+;;
+;; Exit codes mirror the other capital-observation fixture runners:
+;;   0  all fixtures ran clean
+;;   1  a violation was found
+;;   2  REFUSED — the contract could not be read
+;;
+;; Fixtures exercise specifically:
+;;   * stated lifecycle-date kinds carried verbatim and never collapsed
+;;     (vintage-year != stated-first-close != stated-final-close !=
+;;      stated-term-end); unmapped kind words carried with :mapping
+;;      :unmapped, never force-fitted
+;;   * stated-date-is-not-actual-event; term end is not liquidation;
+;;     vintage year is not first-deployment
+;;   * fetch-status admission: a non-:ok receipt backs nothing,
+;;     produces a refusal record, never retro-invalidates
+;;   * provenance chain required on every event
+;;   * cross-source disagreement recorded, never resolved
+;;   * extension announcement appends (extension-appends-does-not-overwrite)
+;;   * out-of-window readback is :unmeasured/:out-of-window, not false
+;;   * strict readback: unknown filter key → :rejected-filter;
+;;     a date-kind filter matches the carried kind exactly
+;;   * forbidden fields absent from the derived-observation shape
+;;   * append-only refresh history
+;;
+;; Run: nbb tools/fund_term_vintage_fixtures.cljs
+
+(ns fund-term-vintage-fixtures
+  (:require ["fs" :as fs]
+            [clojure.edn :as edn]
+            [clojure.string :as str]))
+
+(defonce failures (atom []))
+
+(defn chk [ctx msg ok?]
+  (when-not ok?
+    (swap! failures conj {:fixture (:fixture ctx) :msg msg}))
+  ok?)
+
+;; ── Load the contract ───────────────────────────────────────────────
+(def contract-path "capital-observation/fund-term-and-vintage-observation.edn")
+(def contract
+  (try
+    (edn/read-string (.readFileSync fs contract-path "utf8"))
+    (catch :default e
+      (println (str "REFUSED: cannot read contract: " (.-message e)))
+      (js/process.exit 2))))
+
+;; ── Fixture world (all synthetic, no real fund/company/manager) ─────
+(def fixture-window {:from "2026-01-01" :until "2026-07-01"
+                     :declared-at "2026-09-06" :timezone "UTC"})
+(def later-window {:from "2026-07-01" :until "2027-01-01"
+                   :declared-at "2026-09-06" :timezone "UTC"})
+
+(def fixture-receipts
+  [{:receipt-id "rcpt-t1" :source-url "https://fund.example/fund-9"
+    :source-class :fund-first-party :source-language "en"
+    :observed-at "2026-02-01T00:00:00Z"
+    :content-hash "aa11" :fetch-status :ok}
+   {:receipt-id "rcpt-t2" :source-url "https://registry.example/entity-9"
+    :source-class :official-company-registry :source-language "en"
+    :observed-at "2026-02-02T00:00:00Z"
+    :content-hash "bb22" :fetch-status :ok}
+   ;; non-ok fetch: recorded, backs nothing
+   {:receipt-id "rcpt-t3"
+    :source-url "https://fund.example/fund-9?mirror"
+    :source-class :fund-first-party :source-language "en"
+    :observed-at "2026-02-03T00:00:00Z"
+    :content-hash "cc33" :fetch-status :error}
+   ;; second source for the disagreement fixture
+   {:receipt-id "rcpt-t4" :source-url "https://manager.example/fund-9"
+    :source-class :manager-first-party :source-language "en"
+    :observed-at "2026-02-04T00:00:00Z"
+    :content-hash "dd44" :fetch-status :ok}])
+
+(def fixture-entities
+  [{:entity-id "fv-9" :entity-type :fund-vehicle
+    :name "Fund Nine (fixture)" :legal-name "Fund Nine SCSp (fixture)"
+    :jurisdiction :luxembourg :identifier-class :official-registry-id
+    :identifier-value "FIX-F009" :source-receipt-id "rcpt-t1"
+    :asserted-at "2026-01-05" :observed-at "2026-02-01T00:00:00Z"
+    :provenance-chain ["rcpt-t1"]}
+   {:entity-id "mgmt-9" :entity-type :management-company
+    :name "Fund Nine (fixture)" :legal-name "Fund Nine Management BV (fixture)"
+    :jurisdiction :netherlands :identifier-class :official-registry-id
+    :identifier-value "FIX-M009" :source-receipt-id "rcpt-t1"
+    :asserted-at "2026-01-05" :observed-at "2026-02-01T00:00:00Z"
+    :provenance-chain ["rcpt-t1"]}])
+
+(def fixture-events
+  [{:event-id "ev-t1" :event-type :lifecycle-date-stated :entity-id "fv-9"
+    :asserted-at "2026-02-01" :observed-at "2026-02-01T00:00:00Z"
+    :stated-date {:kind :vintage-year :date-value "2024"
+                  :date-word "vintage 2024" :mapping :mapped}
+    :source-receipt-id "rcpt-t1" :provenance-chain ["rcpt-t1"]}
+   ;; a second, differing stated date of the SAME kind (disagreement fixture)
+   {:event-id "ev-t2" :event-type :lifecycle-date-stated :entity-id "fv-9"
+    :asserted-at "2026-02-05" :observed-at "2026-02-05T00:00:00Z"
+    :stated-date {:kind :vintage-year :date-value "2023"
+                  :date-word "vintage 2023" :mapping :mapped}
+    :source-receipt-id "rcpt-t4" :provenance-chain ["rcpt-t4"]}
+   ;; a source word that does not map to any known date kind
+   {:event-id "ev-t3" :event-type :lifecycle-date-stated :entity-id "fv-9"
+    :asserted-at "2026-03-01" :observed-at "2026-03-01T00:00:00Z"
+    :stated-date {:kind :other-stated-date :date-value ""
+                  :date-word "early bird window" :mapping :unmapped}
+    :source-receipt-id "rcpt-t4" :provenance-chain ["rcpt-t4"]}
+   ;; event backed by a non-ok receipt — must produce a refusal record
+   {:event-id "ev-t4" :event-type :lifecycle-date-stated :entity-id "fv-9"
+    :asserted-at "2026-03-02" :observed-at "2026-03-02T00:00:00Z"
+    :stated-date {:kind :stated-term-end :date-value "2034-12-31"
+                  :date-word "term through Dec 2034" :mapping :mapped}
+    :source-receipt-id "rcpt-t3" :provenance-chain ["rcpt-t3"]}
+   ;; term-end stated, then an extension announcement appends (never overwrite)
+   {:event-id "ev-t5" :event-type :lifecycle-date-stated :entity-id "fv-9"
+    :asserted-at "2026-02-06" :observed-at "2026-02-06T00:00:00Z"
+    :stated-date {:kind :stated-term-end :date-value "2034-12-31"
+                  :date-word "term through Dec 2034" :mapping :mapped}
+    :source-receipt-id "rcpt-t1" :provenance-chain ["rcpt-t1"]}
+   {:event-id "ev-t6" :event-type :extension-announced :entity-id "fv-9"
+    :asserted-at "2026-02-07" :observed-at "2026-02-07T00:00:00Z"
+    :stated-date {:kind :stated-term-end :date-value "2036-12-31"
+                  :date-word "one-year extension through Dec 2036"
+                  :mapping :mapped}
+    :source-receipt-id "rcpt-t1" :provenance-chain ["rcpt-t1"]}])
+
+;; ── Contract logic under test (mirrors the contract's declared rules) ──
+(defn admitted? [receipt]
+  (= :ok (:fetch-status receipt)))
+
+(defn refusal-record [event receipts]
+  (let [r (some #(when (= (:receipt-id %) (:source-receipt-id event)) %)
+                receipts)]
+    (when (and r (not (admitted? r)))
+      {:refused-event-id (:event-id event)
+       :receipt-id (:receipt-id r)
+       :fetch-status (:fetch-status r)
+       :missingness-flag :fetch-status-non-ok
+       :backs-observation? false})))
+
+(defn derived-observations [events receipts window]
+  (for [e events
+        :let [r (some #(when (= (:receipt-id %) (:source-receipt-id e)) %)
+                      receipts)]
+        :when (and (admitted? r)
+                   (>= (compare (:asserted-at e) (:from window)) 0)
+                   (< (compare (:asserted-at e) (:until window)) 0))]
+    {:observation-id (str "obs-" (:event-id e))
+     :method/version (:method/version contract)
+     :window window
+     :observation-kind :fund-vehicle-lifecycle-date-stated-in-window
+     :entity-id (:entity-id e)
+     :event-id (:event-id e)
+     :value {:kind (case (:event-type e)
+                     :extension-announced :extension-announced-in-window
+                     :lifecycle-date-retracted :lifecycle-date-retraction-in-window
+                     :lifecycle-date-stated :lifecycle-date-stated-in-window)
+             :date-kind (get-in e [:stated-date :kind])
+             :basis :receipt-only}
+     :missingness-flags (if (= :unmapped (get-in e [:stated-date :mapping]))
+                          #{:date-kind-unmapped} #{})
+     :provenance-chain (:provenance-chain e)
+     :asserted-at (:asserted-at e)}))
+
+(defn readback [observations events window filter-map]
+  (let [known-keys (get-in contract [:query-readback :request-schema 4
+                                   :keys])]
+    (if-let [unknown (seq (remove known-keys (keys (or filter-map {}))))]
+      {:status :rejected-filter :rejected-keys (vec unknown)}
+      (let [rows (filter (fn [o]
+                           (and (= (:window o) window)
+                                (or (nil? (:date-kind filter-map))
+                                    (= (:date-kind filter-map)
+                                       (get-in o [:value :date-kind])))))
+                         observations)]
+        (if (empty? rows)
+          {:status :unmeasured :observations []
+           :missingness-flags #{:missing-is-unmeasured}}
+          {:status :ok :observations (map :observation-id rows)})))))
+
+;; ── Fixtures ────────────────────────────────────────────────────────
+
+(defn fixture-date-kinds-carried-not-collapsed [f]
+  (chk f "date-kind invariants exist"
+       (some #(= :date-kinds-carried-not-collapsed %)
+             (get-in contract [:event-record :invariants])))
+  (let [event-kinds (into #{} (map (fn [e] (get-in e [:stated-date :kind])))
+                          fixture-events)]
+    (chk f "fixture world carries multiple distinct kinds"
+         (and (contains? event-kinds :vintage-year)
+              (contains? event-kinds :stated-term-end)
+              (contains? event-kinds :other-stated-date)))
+    (chk f "term-end stated and extension carry the same kind but stay separate events"
+         (let [term (some #(when (= "ev-t5" (:event-id %)) %) fixture-events)
+               ext (some #(when (= "ev-t6" (:event-id %)) %) fixture-events)]
+           (and term ext
+                (= :stated-term-end (get-in term [:stated-date :kind]))
+                (= :stated-term-end (get-in ext [:stated-date :kind]))
+                (= :extension-announced (:event-type ext))
+                (= :lifecycle-date-stated (:event-type term))))))
+  (let [unmapped (some #(when (= :unmapped (get-in % [:stated-date :mapping])) %)
+                       fixture-events)]
+    (chk f "unmapped date-kind word must be carried verbatim"
+         (and unmapped (= "early bird window"
+                          (get-in unmapped [:stated-date :date-word]))))
+    (chk f "unmapped kind must not be force-fitted into a known kind"
+         (let [known #{:vintage-year :stated-first-close :stated-final-close
+                       :stated-term-end}]
+           (and unmapped
+                (= :other-stated-date (get-in unmapped [:stated-date :kind]))
+                (not (contains? known (get-in unmapped [:stated-date :kind]))))))
+    (chk f "date-word must be a required schema field"
+         (some #(str/includes? (str %) ":date-word")
+               (get-in contract [:event-record :schema])))))
+
+(defn fixture-stated-date-is-not-actual-event [f]
+  (chk f "stated-date-is-not-actual-event invariant declared"
+       (some #(= :stated-date-is-not-actual-event %)
+             (get-in contract [:event-record :invariants])))
+  (chk f "epistemics forbid treating a term end as an actual liquidation"
+       (some #(= :stated-term-end-is-not-actual-liquidation %)
+             (get-in contract [:date-epistemics :rules])))
+  (chk f "epistemics forbid treating a vintage as first deployment"
+       (some #(= :vintage-year-is-not-first-deployment-date %)
+             (get-in contract [:date-epistemics :rules])))
+  (let [forbidden (get-in contract [:derived-observation :forbidden-fields])]
+    (chk f ":actual-liquidation is forbidden in the derived shape"
+         (contains? forbidden :actual-liquidation))
+    (chk f ":performance is forbidden in the derived shape"
+         (contains? forbidden :performance))))
+
+(defn fixture-fetch-status-admission [f]
+  (let [ra (get contract :receipt-admission)]
+    (chk f "admission rule must be :fetch-status-ok-required"
+         (= (:rule ra) :fetch-status-ok-required))
+    (chk f "only :ok is admitted" (= #{:ok} (:admit-when ra)))
+    (chk f "refusal record required, never silence"
+         (get-in ra [:else :refusal-record-required?]))
+    (chk f "no retro-invalidation"
+         (false? (get-in ra [:else :retro-invalidation?]))))
+  (let [refusal (refusal-record
+                 (some #(when (= "ev-t4" (:event-id %)) %) fixture-events)
+                 fixture-receipts)]
+    (chk f "non-ok receipt produces a refusal record"
+         (and refusal (= :fetch-status-non-ok (:missingness-flag refusal))))
+    (let [obs (derived-observations fixture-events fixture-receipts
+                                    fixture-window)
+          backed? (some #(when (= "obs-ev-t4" (:observation-id %)) %) obs)]
+      (chk f "non-ok-backed event must produce no derived observation"
+           (nil? backed?)))))
+
+(defn fixture-provenance-chain-required [f]
+  (chk f "entity record schema requires provenance-chain"
+       (get-in contract [:entity-record :provenance-chain-required?]))
+  (chk f "event invariants require provenance chain"
+       (some #(= :provenance-chain-required-on-every-event %)
+             (get-in contract [:event-record :invariants])))
+  (chk f "every fixture event carries a non-empty chain"
+       (every? (fn [e] (seq (:provenance-chain e))) fixture-events))
+  (chk f "chain head equals the event's receipt id"
+       (every? (fn [e] (= (last (:provenance-chain e))
+                          (:source-receipt-id e)))
+               fixture-events)))
+
+(defn fixture-disagreement-recorded-never-resolved [f]
+  (let [dd (get contract :date-disagreement)]
+    (chk f "disagreement rule is record-never-resolve"
+         (= (:rule dd) :record-never-resolve))
+    (chk f "no winner mechanism"
+         (get-in dd [:result :no-winner-mechanism]))
+    (chk f "disagreement value is :unmeasured"
+         (= :unmeasured (get-in dd [:result :value])))
+    (chk f "hardening rule keeps a disagreement from becoming a date"
+         (= :disagreement-never-hardens-into-a-date
+            (get-in dd [:result :hardening-rule]))))
+  (let [a (some #(when (= "ev-t1" (:event-id %)) %) fixture-events)
+        b (some #(when (= "ev-t2" (:event-id %)) %) fixture-events)]
+    (chk f "fixture really has two differing dates of one kind for one entity"
+         (and a b
+              (= (get-in a [:stated-date :kind]) (get-in b [:stated-date :kind]))
+              (not= (get-in a [:stated-date :date-value])
+                    (get-in b [:stated-date :date-value]))
+              (= (:entity-id a) (:entity-id b))))))
+
+(defn fixture-extension-appends-never-overwrites [f]
+  (chk f "extension-appends-does-not-overwrite invariant declared"
+       (some #(= :extension-appends-does-not-overwrite %)
+             (get-in contract [:event-record :invariants])))
+  (chk f "extension-announced appears in the event-type set"
+       (contains? (:event-types contract) :extension-announced))
+  (chk f "extension_announced is a refresh-history reason"
+       (str/includes? (str (get-in contract [:refresh-history :schema]))
+                      "extension-announced"))
+  (let [obs (derived-observations fixture-events fixture-receipts
+                                  fixture-window)
+        term (some #(when (= "obs-ev-t5" (:observation-id %)) %) obs)
+        ext (some #(when (= "obs-ev-t6" (:observation-id %)) %) obs)]
+    (chk f "term-end statement is derived (not overwritten by the extension)"
+         (and term (= :lifecycle-date-stated-in-window
+                      (get-in term [:value :kind]))))
+    (chk f "extension is derived as its own appended observation"
+         (and ext (= :extension-announced-in-window
+                     (get-in ext [:value :kind]))))))
+
+(defn fixture-out-of-window-is-not-false [f]
+  (chk f "out-of-window rule declared"
+       (some #(= :date-outside-window-is-out-of-window-not-false %)
+             (get-in contract [:date-epistemics :rules])))
+  (let [obs (derived-observations fixture-events fixture-receipts
+                                  fixture-window)
+        rb (readback obs fixture-events later-window nil)]
+    (chk f "empty window reads :unmeasured, not zero"
+         (and (= :unmeasured (:status rb)) (empty? (:observations rb))))))
+
+(defn fixture-strict-readback [f]
+  (let [obs (derived-observations fixture-events fixture-receipts
+                                  fixture-window)
+        rejected (readback obs fixture-events fixture-window {:bogus-key "x"})]
+    (chk f "unknown filter key is rejected, not ignored"
+         (= :rejected-filter (:status rejected))))
+  (let [obs (derived-observations fixture-events fixture-receipts
+                                  fixture-window)
+        vintage-filter (readback obs fixture-events fixture-window
+                                 {:date-kind :vintage-year})
+        term-filter (readback obs fixture-events fixture-window
+                              {:date-kind :stated-term-end})]
+    (chk f "date-kind filter matches the carried kind exactly"
+         (and (= :ok (:status vintage-filter))
+              (not (some #(= "obs-ev-t5" %) (:observations vintage-filter)))))
+    (chk f "a statement of another kind is never returned under term-end"
+         (and (= :ok (:status term-filter))
+              (not (some #(= "obs-ev-t1" %) (:observations term-filter))))))
+  (let [rb (get-in contract [:query-readback :rules])]
+    (chk f "readback declares exact-kind filter matching"
+         (some #(= :date-kind-filter-matches-carried-kind-exactly %) rb))
+    (chk f "readback declares unmapped-kind rule"
+         (some #(= :unmapped-kind-never-returned-under-a-known-kind-filter %) rb))
+    (chk f "readback declares unmeasured-is-not-zero"
+         (some #(= :unmeasured-is-not-zero %) rb))
+    (chk f "readback always carries coverage and missingness"
+         (some #(= :readback-must-carry-coverage-and-missingness %) rb))))
+
+(defn fixture-forbidden-fields [f]
+  (let [forbidden (get-in contract [:derived-observation :forbidden-fields])]
+    (doseq [k [:rank :score :tvpi :dpi :deployment-pace :dry-powder
+               :fund-health :actual-liquidation :effective-term-end
+               :ownership-stake :suitability]]
+      (chk f (str "forbidden field declared: " (name k))
+           (contains? forbidden k)))))
+
+(defn fixture-refresh-history-append-only [f]
+  (let [rh (get contract :refresh-history)]
+    (chk f "refresh history is append-only" (get rh :append-only?))
+    (chk f "extension and retraction are history reasons"
+         (and (str/includes? (str (:schema rh)) "extension-announced")
+              (str/includes? (str (:schema rh)) "lifecycle-date-retraction")
+              (str/includes? (str (:schema rh)) "receipt-refetched")))))
+
+(defn fixture-hyakka-questions-only [f]
+  (let [hp (get contract :hyakka-proposal)]
+    (chk f "proposal carries a disclaimer"
+         (str/includes? (str (:disclaimer hp)) "No investment advice"))
+    (chk f "proposal schema carries coverage ref and missingness"
+         (and (str/includes? (str (:schema hp)) "coverage-record-ref")
+              (str/includes? (str (:schema hp)) "missingness-flags")))))
+
+(defn fixture-coverage-record [f]
+  (let [m (get contract :missingness)]
+    (chk f "missing-is-unmeasured" (= :missing-is-unmeasured (:rule m)))
+    (chk f "lifecycle-date-not-stated is a flag"
+         (contains? (:flags m) :lifecycle-date-not-stated))
+    (chk f "date-kind-unmapped is a flag"
+         (contains? (:flags m) :date-kind-unmapped))
+    (chk f "date-disagreement is a flag"
+         (contains? (:flags m) :date-disagreement))
+    (chk f "date-kind appears in the coverage unit"
+         (some #{:date-kind} (:coverage-unit m)))
+    (chk f "coverage-record schema exists"
+         (seq (get-in m [:coverage-record :schema])))))
+
+;; ── Runner ──────────────────────────────────────────────────────────
+(def fixtures
+  [[:date-kinds-carried-not-collapsed fixture-date-kinds-carried-not-collapsed]
+   [:stated-date-is-not-actual-event fixture-stated-date-is-not-actual-event]
+   [:fetch-status-admission fixture-fetch-status-admission]
+   [:provenance-chain-required fixture-provenance-chain-required]
+   [:disagreement-recorded-never-resolved fixture-disagreement-recorded-never-resolved]
+   [:extension-appends-never-overwrites fixture-extension-appends-never-overwrites]
+   [:out-of-window-is-not-false fixture-out-of-window-is-not-false]
+   [:strict-readback fixture-strict-readback]
+   [:forbidden-fields fixture-forbidden-fields]
+   [:refresh-history-append-only fixture-refresh-history-append-only]
+   [:hyakka-questions-only fixture-hyakka-questions-only]
+   [:coverage-record fixture-coverage-record]])
+
+(doseq [[name f] fixtures] (f {:fixture name}))
+
+(if (empty? @failures)
+  (do (println (str "OK: " (count fixtures)
+                    " fund-term-and-vintage fixtures ran clean ("
+                    (:method/version contract) ")"))
+      (js/process.exit 0))
+  (do (doseq [{:keys [fixture msg]} @failures]
+        (println (str "VIOLATION [" fixture "]: " msg)))
+      (println (str "FAILED: " (count @failures) " violation(s)"))
+      (js/process.exit 1)))

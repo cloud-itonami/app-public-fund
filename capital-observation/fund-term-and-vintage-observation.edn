@@ -1,0 +1,226 @@
+;; fund-term-and-vintage-observation.edn — bounded actor contract for
+;; observing **stated fund lifecycle dates** — "source S stated that
+;; fund vehicle F has lifecycle date D of kind K as of time T" (vintage
+;; year, stated first-close, stated final-close, stated term end) — as
+;; first-party or registry/securities-filing-backed, hash-backed
+;; claims, proposed to Hyakka (network-awai/app-hyakka) as auditable
+;; questions, not as a score.
+;;
+;; Scope guard: this contract observes the *stated lifecycle-date
+;; naming* plane only. It does NOT rank funds, GPs, LPs or startups, and
+;; it does NOT infer deployment pace, dry powder, fund health, TVPI/DPI,
+;; performance, or liquidation timing from a stated date. A stated date
+;; is the source's own statement; it is not a verified lifecycle event,
+;; an audited record, a performance measure, an endorsement or a
+;; suitability signal.
+;;
+;; Entity separation holds: a fund vehicle, its management company and
+;; its general partner are distinct entities even under one brand
+;; (brand-is-not-legal-entity), and only the fund-vehicle plane carries
+;; lifecycle dates. A vehicle's stated vintage is never carried onto its
+;; management company or GP, and a management company's incorporation
+;; date is never carried onto the vehicle.
+;;
+;; Method version: v1 (2026-09-06). Companion to
+;; fund-vehicle-status-observation (a lifecycle date is not a lifecycle
+;; status), fund-domicile-observation (a date is not a jurisdiction),
+;; and fund-close-observation (a stated date is not a completed cash
+;; flow). Any change to field semantics bumps :method/version and
+;; appends a :refresh/history entry; old observations are never silently
+;; reinterpreted.
+
+{:contract/id :fund-term-and-vintage-observation
+ :contract/version "1.0.0"
+ :method/version "fund-term-and-vintage-observation.v1"
+ :actor :cloud-itonami/app-public-fund
+ :proposes-to :network-awai/app-hyakka
+
+ ;; ── Measurement window ─────────────────────────────────────────────
+ ;; Half-open interval [from, until) in UTC ISO-8601 dates. "missing"
+ ;; inside a window means "not measured in this window", never
+ ;; "no lifecycle date was stated".
+ :window
+ {:schema [:from :until :declared-at :timezone]
+  :format "YYYY-MM-DD"
+  :closed? false
+  :rule :window-must-not-overlap-within-same-source-and-method}
+
+ ;; ── Source receipts ────────────────────────────────────────────────
+ ;; Every observation cites exactly one receipt, captured verbatim
+ ;; (bytes hash + fetch metadata) before any parsing.
+ :source-receipt
+ {:schema [:receipt-id :source-url :source-class :source-language
+           :observed-at :content-hash :fetch-status]
+  :content-hash {:algo "sha256" :of "response-body-bytes"}
+  :fetch-status-vocabulary #{:ok :error :redirected :not-modified
+                             :robots-disallowed :auth-required}
+  :source-class-allow #{:fund-first-party :manager-first-party
+                        :official-regulator :official-securities-filing
+                        :official-stock-exchange-filing
+                        :official-company-registry}
+  :source-class-forbid #{:search-snippet :generated-summary :scraped-directory
+                         :social-post :broker-list :paywall-bypass
+                         :captcha-bypass}
+  ;; discovery-only pointers never back a derived observation:
+  :source-class-discovery-only #{:news-report :licensed-commercial-aggregator}
+  :fetch {:respect-robots? true :respect-auth-waf-captcha? true
+          :user-agent "app-public-fund-capital-observation/1.0"}}
+
+ ;; ── Fetch-status admission ─────────────────────────────────────────
+ ;; A receipt whose fetch was not fully :ok backs no entity, event or
+ ;; derived observation. A refused admission produces a refusal record
+ ;; (never silence) and never retro-invalidates earlier observations.
+ :receipt-admission
+ {:rule :fetch-status-ok-required
+  :admit-when #{:ok}
+  :else {:missingness-flag :fetch-status-non-ok
+         :backs-observation? false
+         :refusal-record-required? true
+         :retro-invalidation? false}}
+
+ ;; ── Typed entity/event inputs ──────────────────────────────────────
+ :entity-types #{:fund-vehicle :management-company :general-partner
+                 :limited-partner}
+ :event-types #{:lifecycle-date-stated :extension-announced
+                :lifecycle-date-retracted}
+ :entity-record
+ {:schema [:entity-id :entity-type :name :legal-name :jurisdiction
+           :identifier-class :identifier-value :source-receipt-id
+           :asserted-at :observed-at :provenance-chain]
+  :invariant :one-entity-type-per-entity-id
+  :identifier-invariant [:identifier-value-unique-across-entity-types
+                         :one-identifier-per-entity-id]
+  :provenance-chain-required? true
+  :note "A brand string never auto-creates a legal entity."}
+ :event-record
+ {:schema [:event-id :event-type :entity-id :asserted-at :observed-at
+           :stated-date {:kind [:one-of :vintage-year :stated-first-close
+                          :stated-final-close :stated-term-end :other-stated-date]
+                         :date-value :string ; verbatim stated value (YYYY-MM-DD or YYYY)
+                         :date-word :string  ; verbatim source wording
+                         :mapping [:one-of :mapped :unmapped]}
+           :source-receipt-id
+           :provenance-chain]
+  ;; date-kinds-carried-not-collapsed: a stated first-close date is not
+  ;; a stated final-close date, a stated term end is not an actual
+  ;; liquidation, and a vintage year is not a first-deployment date.
+  ;; An unmapped source word is carried with :mapping :unmapped together
+  ;; with the verbatim :date-word — never force-fitted into a known kind.
+  :invariants [:date-kinds-carried-not-collapsed
+               :stated-date-is-not-actual-event
+               :provenance-chain-required-on-every-event
+               :extension-appends-does-not-overwrite]}
+
+ ;; ── A stated date is not an actual event ──────────────────────────
+ ;; Bound to its receipt and window; outside the window the readback
+ ;; answers :out-of-window — never "still the term end", never "no
+ ;; longer". A later statement, an extension announcement, or a
+ ;; retraction appends; earlier statements are never overwritten,
+ ;; deleted, or reinterpreted in hindsight.
+ :date-epistemics
+ {:rules [:stated-date-is-not-actual-or-verified-event
+          :stated-date-is-not-performance-or-suitability-fact
+          :stated-term-end-is-not-actual-liquidation
+          :vintage-year-is-not-first-deployment-date
+          :date-outside-window-is-out-of-window-not-false
+          :later-statement-appends-never-overwrites
+          :one-source-statement-plus-another-source-silence-is-not-conflict]}
+
+ ;; ── Cross-source disagreement ──────────────────────────────────────
+ ;; Two allowed sources stating different lifecycle dates of the same
+ ;; kind for the same (entity, window) produce a conflict observation
+ ;; with ALL competing receipt ids and value :unmeasured. Resolution is
+ ;; always :carry-both-never-resolve — a disagreement never hardens into
+ ;; a "the term end" claim.
+ :date-disagreement
+ {:rule :record-never-resolve
+  :applies-when [:two-or-more-allow-class-receipts :same-entity-id
+                 :same-date-kind :same-window :differing-stated-date]
+  :result {:missingness-flag :date-disagreement
+           :provenance-chain :all-conflicting-receipt-ids
+           :value :unmeasured
+           :no-winner-mechanism true
+           :hardening-rule :disagreement-never-hardens-into-a-date}}
+
+ ;; ── Missingness / coverage flags ───────────────────────────────────
+ :missingness
+ {:flags #{:no-receipt :receipt-unparseable :lifecycle-date-not-stated
+           :date-kind-unmapped :date-value-unparseable
+           :source-language-unmapped :fetch-status-non-ok
+           :identifier-unstated :provenance-chain-incomplete
+           :date-disagreement :extension-not-yet-announced}
+  :rule :missing-is-unmeasured
+  :coverage-unit [:jurisdiction :source :language :year :date-kind
+                  :identifier-class]
+  :coverage-record
+  {:schema [:coverage-unit :unit-key :observed-count :unmeasured-count
+            :window :method/version]}}
+
+ ;; ── Derived observation ────────────────────────────────────────────
+ ;; The only derived artifact is an observation of lifecycle-date
+ ;; statements within a window. No ranking, scoring, deployment pace,
+ ;; dry powder, fund health, TVPI/DPI, performance, ownership or
+ ;; suitability field exists in this shape by construction.
+ :derived-observation
+ {:schema [:observation-id :method/version :window
+           :observation-kind :entity-id :event-id
+           :value {:kind [:one-of :lifecycle-date-stated-in-window
+                    :extension-announced-in-window
+                    :lifecycle-date-retraction-in-window]
+                   :date-kind [:one-of :vintage-year :stated-first-close
+                          :stated-final-close :stated-term-end
+                          :other-stated-date]
+                   :basis #{:receipt-only}}
+           :missingness-flags :provenance-chain
+           :asserted-at]
+  :observation-kinds #{:fund-vehicle-lifecycle-date-stated-in-window}
+  :forbidden-fields #{:rank :score :centrality :nav :ownership-stake
+                      :suitability :recommendation :tvpi :dpi
+                      :deployment-pace :dry-powder :fund-health
+                      :actual-liquidation :effective-term-end
+                      :verified-date :performance}}
+
+ ;; ── Refresh history ────────────────────────────────────────────────
+ ;; Append-only. An extension announcement, a retraction, a lifecycle
+ ;; date re-statement, a re-fetch or a method bump appends a new event
+ ;; plus a history entry; prior observations are never edited or deleted.
+ :refresh-history
+ {:schema [:history-id :observation-id :re-observed-at
+           :reason {:kind [:one-of :window-advanced :source-updated
+                     :extension-announced :lifecycle-date-retraction
+                     :receipt-refetched :method-version-bumped]}]
+  :append-only? true}
+
+ ;; ── Hyakka proposal ────────────────────────────────────────────────
+ ;; Auditable QUESTIONS over observation records, e.g. "how many
+ ;; fund-vehicle lifecycle-date statements of kind K did source S issue
+ ;; in window W?" — each question carries its own coverage/missingness
+ ;; statement.
+ :hyakka-proposal
+ {:schema [:proposal-id :question-text :over-observation-kind
+           :window :coverage-record-ref :missingness-flags
+           :disclaimer]
+  :disclaimer
+  "Observations only. Not performance, ownership, endorsement, lifecycle verification or investment suitability. No investment advice."}
+
+ ;; ── Query / readback shape ─────────────────────────────────────────
+ ;; Deterministic readback. Unknown filter keys are rejected
+ ;; (:rejected-filter), never silently ignored. A :date-kind filter
+ ;; matches the carried kind exactly — a stated-term-end statement is
+ ;; never returned under a vintage-year filter, and an :unmapped
+ ;; :other-stated-date statement is never returned under a specific-kind
+ ;; filter (date kinds never collapse in readback). Unavailable sources
+ ;; answer :unmeasured, not zero.
+ :query-readback
+ {:request-schema [:query-id :observation-kind :window
+                   :filter {:keys #{:date-kind :entity-type}}]
+  :response-schema [:query-id :status
+                    :observations [:observation-id]
+                    :coverage-record-ref
+                    :missingness-flags]
+  :status-values #{:ok :unmeasured :out-of-window :rejected-filter}
+  :rules [:unknown-filter-key-is-rejected-not-ignored
+          :date-kind-filter-matches-carried-kind-exactly
+          :unmapped-kind-never-returned-under-a-known-kind-filter
+          :unmeasured-is-not-zero
+          :readback-must-carry-coverage-and-missingness]}}
