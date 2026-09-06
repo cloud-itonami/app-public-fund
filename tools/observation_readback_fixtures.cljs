@@ -12,7 +12,8 @@
 ;; across identical requests, empty-page coverage carry, unknown-key
 ;; rejection, one-method-version-per-page separation, forbidden-field
 ;; absence in page responses, and unavailable-source → :unmeasured (no
-;; cache rebuild).
+;; cache rebuild), plus (v2) receipt-admission and provenance-chain
+;; completeness so a page is never silently :ok on unverifiable backing.
 
 (ns observation-readback-fixtures
   (:require ["fs" :as fs]
@@ -36,18 +37,33 @@
 
 ;; ── Deterministic in-memory readback engine (the shape under test) ──
 ;; Sorted rows keyed by observation-id; each row carries its own
-;; method/version. The engine implements exactly what the contract
-;; prescribes; fixtures assert the prescribed properties hold.
+;; method/version and a provenance chain of receipt ids that must resolve
+;; to the served contract's receipt set. The engine implements exactly
+;; what the contract prescribes; fixtures assert the prescribed properties.
 
 (def rows
   [{:observation-id "obs-001" :method/version "fund-close-observation.v1"
-    :window "2026-07" :kind :fund-close-in-window}
+    :window "2026-07" :kind :fund-close-in-window
+    :provenance-chain ["rcpt-a"]}
    {:observation-id "obs-002" :method/version "fund-close-observation.v1"
-    :window "2026-07" :kind :fund-close-in-window}
+    :window "2026-07" :kind :fund-close-in-window
+    :provenance-chain ["rcpt-b"]}
    {:observation-id "obs-003" :method/version "fund-close-observation.v2"
-    :window "2026-07" :kind :fund-close-in-window}
+    :window "2026-07" :kind :fund-close-in-window
+    :provenance-chain ["rcpt-a" "rcpt-b"]}
    {:observation-id "obs-005" :method/version "fund-close-observation.v1"
-    :window "2026-07" :kind :fund-close-in-window}])
+    :window "2026-07" :kind :fund-close-in-window
+    :provenance-chain ["rcpt-b"]}])
+
+;; Served contract's receipt set — the only receipts rows may cite. All
+;; rows in `rows` cite only these, so the paging/cursor fixtures test
+;; paging mechanics in isolation; admission failure is exercised separately.
+(def served-receipt-set
+  [{:receipt-id "rcpt-a" :fetch-status :ok}
+   {:receipt-id "rcpt-b" :fetch-status :ok}])
+
+(def receipt-fetch-status
+  (into {} (map (juxt :receipt-id :fetch-status)) served-receipt-set))
 
 (def coverage {:coverage-unit :jurisdiction :unit-key "JP"
                :observed-count 5 :unmeasured-count 1
@@ -56,7 +72,24 @@
 
 (defn sort-key [r] (:observation-id r))
 
-(defn page-of [rows request]
+(defn row-backing [r]
+  (or (:provenance-chain r) (when (:source-receipt-id r) [(:source-receipt-id r)])))
+
+;; Admission classification returns :serveable or [:unmeasured reason].
+;; reason: :backing-receipt-non-ok when a cited receipt is present but its
+;; fetch-status is not :ok; :provenance-chain-incomplete when a cited
+;; receipt is absent from the served receipt set.
+(defn admit-row [r status-map]
+  (let [backing (row-backing r)]
+    (cond
+      (not (seq backing)) [:unmeasured :provenance-chain-incomplete]
+      (not (every? #(contains? status-map %) backing))
+      [:unmeasured :provenance-chain-incomplete]
+      (some #(not= :ok (get status-map %)) backing)
+      [:unmeasured :backing-receipt-non-ok]
+      :else :serveable)))
+
+(defn page-of* [rows request status-map]
   (let [ps (get-in request [:page :page-size] 50)
         after (get-in request [:page :cursor])
         ordered (sort-by sort-key rows)
@@ -66,21 +99,40 @@
                    true (filter #(= (:kind %) (:observation-kind request)))
                    after (filter #(pos? (compare (:observation-id %) after))))
         page (take ps eligible)
+        blocked (first (keep (fn [st]
+                               (when (and (vector? st) (= :unmeasured (first st))) st))
+                             (map #(admit-row % status-map) page)))
         more? (> (count eligible) ps)
-        next-cursor (when more? (:observation-id (last page)))]
-    {:query-id (:query-id request)
-     :status :ok
-     :page {:cursor-next next-cursor
-            :page-size (count page)
-            :has-more more?}
-     :observations (mapv :observation-id page)
-     :coverage-record-ref coverage
-     :missingness-flags missingness
-     :empty-reason nil}))
+        next-cursor (when more? (:observation-id (last page)))
+        citations (into [] (mapcat (fn [r]
+                                     (mapv #(vector (:observation-id r) %) (row-backing r)))
+                                   page))]
+    (if blocked
+      {:query-id (:query-id request)
+       :status :unmeasured
+       :page {:cursor-next nil :page-size 0 :has-more false}
+       :observations []
+       :page-citations []
+       :coverage-record-ref coverage
+       :missingness-flags (conj missingness :provenance-chain-incomplete)
+       :empty-reason (second blocked)}
+      {:query-id (:query-id request)
+       :status :ok
+       :page {:cursor-next next-cursor
+              :page-size (count page)
+              :has-more more?}
+       :observations (mapv :observation-id page)
+       :page-citations citations
+       :coverage-record-ref coverage
+       :missingness-flags missingness
+       :empty-reason nil})))
 
-;; ── Fixtures ────────────────────────────────────────────────────────
+(defn page-of [rows request]
+  (page-of* rows request receipt-fetch-status))
 
-;; 1. Deterministic ordering: page-1 then page-2 partitions all rows in
+;; ── Fixtures ───────────────────────────────────────────────────────
+
+;; 1. Deterministic ordering: page-1 then page-2 partitions all v1 rows in
 ;;    observation-id order, no row skipped or duplicated.
 (def request-1 {:query-id "q-fixture-1" :observation-kind :fund-close-in-window
                 :method/version "fund-close-observation.v1" :window "2026-07"
@@ -103,8 +155,10 @@
   (fail! :identical-request-twice "same request returned different pages"))
 
 ;; 3. Version separation: one page never mixes method versions.
-(def mixed (page-of (assoc rows 0 (assoc (rows 0) :method/version "fund-close-observation.v9"))
-                    request-1))
+(def mixed (page-of
+            (assoc rows 0
+                   (assoc (rows 0) :method/version "fund-close-observation.v9"))
+            request-1))
 (when (some #(= "obs-001" %) (:observations mixed))
   (fail! :version-mixing "a different version's row must not enter the page"))
 
@@ -113,7 +167,6 @@
 (when-not (contains? (set (:schema (:page-request contract))) :page)
   (fail! :contract-shape "page-request missing"))
 (defn reject-unknown-keys? [request schema]
-  ;; unknown top-level key outside the declared schema → :bad-request
   (let [allowed #{:query-id :observation-kind :method/version :window :page :filter}]
     (if (every? allowed (keys request)) false true)))
 (when-not (reject-unknown-keys? unknown-key-request nil)
@@ -144,6 +197,67 @@
                (= :unmeasured (get-in contract [:retention :unavailable-source-response])))
   (fail! :no-cache-rebuild "retention rule must forbid cache rebuild"))
 
+;; ── v2 fixtures: receipt admission + provenance-chain completeness ──
+
+;; 8. v2 method/version pinned.
+(when-not (str/starts-with? (:method/version contract) "observation-readback.v2")
+  (fail! :v2-method-version
+         (str "expected observation-readback.v2, got " (:method/version contract))))
+
+;; 9. Receipt-admission rule present and forbids re-verify/rebuild at serve.
+(def ra (get-in contract [:receipt-admission]))
+(when-not (and ra (= :serve-only-rows-with-admitted-backing-receipts (:rule ra)))
+  (fail! :v2-receipt-admission-rule "receipt-admission rule missing"))
+(when (get-in ra [:rebuild-or-reverify?])
+  (fail! :v2-no-reverify "serving plane must never re-verify or rebuild"))
+
+;; 10. A page spanning a row whose backing receipt is ABSENT from the served
+;;     set is :unmeasured with :provenance-chain-incomplete, never :ok.
+(def bad-row (assoc (rows 1) :provenance-chain ["rcpt-missing"]))
+(def bad-page (page-of (assoc rows 1 bad-row) request-1))
+(when (not= :unmeasured (:status bad-page))
+  (fail! :v2-unresolved-chain-served-unmeasured
+         (str "unresolved-chain page must be :unmeasured, got " (:status bad-page))))
+(when-not (= :provenance-chain-incomplete (:empty-reason bad-page))
+  (fail! :v2-unresolved-chain-reason
+         (str "expected :provenance-chain-incomplete, got " (:empty-reason bad-page))))
+(when (seq (:observations bad-page))
+  (fail! :v2-unresolved-chain-no-rows
+         "an :unmeasured page must carry no observation rows"))
+
+;; 11. A page whose backing receipt is present but fetch-status :non-ok is
+;;     :unmeasured with :backing-receipt-non-ok, never :ok.
+(def status-with-nonok (assoc receipt-fetch-status "rcpt-non-ok" :non-ok))
+(def nonok-row (assoc (rows 0) :provenance-chain ["rcpt-non-ok"]))
+(def rows-with-nonok (mapv #(if (= "obs-001" (:observation-id %)) nonok-row %) rows))
+(def nonok-page (page-of* rows-with-nonok request-1 status-with-nonok))
+(when (not= :unmeasured (:status nonok-page))
+  (fail! :v2-non-ok-served-unmeasured
+         (str "non-ok-backing page must be :unmeasured, got " (:status nonok-page))))
+(when-not (= :backing-receipt-non-ok (:empty-reason nonok-page))
+  (fail! :v2-non-ok-reason
+         (str "expected :backing-receipt-non-ok, got " (:empty-reason nonok-page))))
+
+;; 12. v2 response schema carries :page-citations and both new empty-reasons.
+(def resp-schema (set (:schema (:page-response contract))))
+(when-not (contains? resp-schema :page-citations)
+  (fail! :v2-page-citations "page-response must carry :page-citations"))
+(def er-spec (some (fn [[k v]] (when (= :empty-reason k) v))
+                   (partition 2 (:schema (:page-response contract)))))
+(when-not (and er-spec (vector? er-spec))
+  (fail! :v2-empty-reason-structure "empty-reason must have an [:one-of ...] shape"))
+(def er-vals (if (and er-spec (= :one-of (first er-spec)))
+               (set (rest er-spec))
+               #{}))
+(when-not (contains? er-vals :backing-receipt-non-ok)
+  (fail! :v2-empty-reason-1 ":backing-receipt-non-ok must be an empty-reason"))
+(when-not (contains? er-vals :provenance-chain-incomplete)
+  (fail! :v2-empty-reason-2 ":provenance-chain-incomplete must be an empty-reason"))
+(when-not (contains? (:fields-in-page (:page-response contract)) :page-citations)
+  (fail! :v2-page-citations-in-fields "page-citations must be a served field"))
+(when (some forbidden (keys p1))
+  (fail! :v2-forbidden-in-page "an admitted :ok page carried a forbidden field"))
+
 ;; ── Report ──────────────────────────────────────────────────────────
 (if (seq @failures)
   (do
@@ -152,7 +266,9 @@
     (println (str (count @failures) " violation(s) found."))
     (js/process.exit 1))
   (do
-    (println "OK: 7 readback fixtures ran clean (pagination, cursor stability,")
+    (println "OK: 12 readback fixtures ran clean (pagination, cursor stability,")
     (println "version separation, unknown-key rejection, empty-page coverage,")
-    (println "forbidden-field absence, no-cache-rebuild).")
+    (println "forbidden-field absence, no-cache-rebuild, v2 method/version,")
+    (println "receipt-admission, provenance-chain completeness, page-citations,")
+    (println "v2 empty-reasons).")
     (js/process.exit 0)))

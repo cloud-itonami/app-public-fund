@@ -12,11 +12,15 @@
 ;; fields, no aggregation beyond the per-kind counts already defined in the
 ;; underlying contracts, and structurally forbids rank/score/centrality/
 ;; ownership/suitability/valuation in responses, headers and cursors.
-;; Method version: observation-readback.v1 (2026-09-01).
+;; Method version: observation-readback.v2 (2026-09-06).  v2 carries the
+;; receipt-admission and provenance-chain guarantees the content contracts
+;; enforce onto the serving plane so a page is never silently :ok while its
+;; backing evidence is unverifiable.  v1 history: observation-readback.v1
+;; (2026-09-01) initial bounded page shape.
 
 {:contract/id :observation-query-readback
- :contract/version "1.0.0"
- :method/version "observation-readback.v1"
+ :contract/version "2.0.0"
+ :method/version "observation-readback.v2"
  :actor :cloud-itonami/app-public-fund
  :proposes-to :network-awai/app-hyakka
  :composes-with [:fund-close-observation]   ; any contract exposing :query-readback
@@ -58,6 +62,38 @@
   :cross-version-comparison {:allowed-via #{:entity-id :event-id :window}
                              :not-by :implicit-merge}}
 
+ ;; ── Receipt admission at the serving plane (v2) ────────────────────
+ ;; The content contracts only back a derived observation with a receipt
+ ;; whose fetch fully succeeded. The serving plane honours the same rule:
+ ;; a page whose rows cite a backing receipt that was not admitted is
+ ;; served :unmeasured (:empty-reason :backing-receipt-non-ok), never
+ ;; :ok. A non-admitted row is not silently dropped to "make room" — when
+ ;; a page mixes admitted and non-admitted rows, the whole page is
+ ;; :unmeasured so the reader cannot mistake a partial page for the full
+ ;; answer. Readback never re-bases, re-verifies or repairs a receipt.
+ :receipt-admission
+ {:rule :serve-only-rows-with-admitted-backing-receipts
+  :admissible #{:fetch-status :ok}
+  :non-admitted-row :never-served-as-ok
+  :mixed-page {:served :unmeasured
+               :empty-reason :backing-receipt-non-ok}
+  :rebuild-or-reverify? false}
+
+ ;; ── Provenance-chain completeness at the serving plane (v2) ────────
+ ;; Every row's provenance chain must resolve to a receipt present in the
+ ;; served contract's receipt set. A row with an unresolved chain (its
+ ;; cited receipt does not exist in the set) is :unmeasured — v2 gives it
+ ;; :empty-reason :provenance-chain-incomplete, matching the
+ ;; :provenance-chain-incomplete flag the content contracts emit. A chain
+ ;; is never repaired or guessed at serve time.
+ :provenance-chain
+ {:required-on-row? true
+  :must-resolve-to :served-contract-receipt-set
+  :unresolved {:served :unmeasured
+               :empty-reason :provenance-chain-incomplete
+               :flag :provenance-chain-incomplete}
+  :repair-or-guess? false}
+
  ;; ── Page response ──────────────────────────────────────────────────
  ;; Every response — including empty pages and :unmeasured — carries the
  ;; coverage record reference and missingness flags of the window it
@@ -69,20 +105,25 @@
                   :page-size :returned-count
                   :has-more :bool}
            :observations [:observation-id]
+           :page-citations [[:observation-id :receipt-id]]   ; v2
            :coverage-record-ref :missingness-flags
            :empty-reason [:one-of :nil :no-receipts-in-window
-                          :kind-not-observed :window-out-of-coverage]]
+                          :kind-not-observed :window-out-of-coverage
+                          :backing-receipt-non-ok               ; v2
+                          :provenance-chain-incomplete]]       ; v2
   :status-values #{:ok :unmeasured :out-of-window :bad-request}
   :rule :every-response-carries-coverage-and-missingness
   ;; Identifiers returned are opaque observation/entity ids only. Legal
   ;; names, registry identifiers, amounts and receipt URLs are resolved
   ;; through the underlying contract's own readback, never denormalized
-  ;; into pages.
-  :fields-in-page #{:observation-id}
+  ;; into pages. Only citation receipt-ids ride along (v2) so a consumer
+  ;; can verify a page traces to resolvable evidence without exposing
+  ;; source-content.
+  :fields-in-page #{:observation-id :page-citations}
   :forbidden-fields #{:rank :score :centrality :nav :ownership-stake
                       :suitability :recommendation :current-valuation
                       :legal-name :identifier-value :amount
-                      :source-url :content-hash}}
+                      :source-url :content-hash :source-body}}
 
  ;; ── Retention / redaction ──────────────────────────────────────────
  ;; Readback is a serving projection. If a page source is unavailable,
@@ -96,8 +137,10 @@
  ;; ── Hyakka proposal (questions only) ───────────────────────────────
  ;; Example auditable question enabled by this shape: "Given window W and
  ;; method version V, are the fund-first-close observation pages stable
- ;; and coverage-carrying across two identical readbacks?" — pagination
- ;; stability is itself an auditable property, not a score.
+ ;; and coverage-carrying across two identical readbacks, and does every
+ ;; served page cite only admitted, resolvable backing receipts?" —
+ ;; pagination stability and receipt admission are themselves auditable
+ ;; properties, not a score.
  :hyakka-proposal
  {:schema [:proposal-id :question-text :over-page-request
            :stability-check {:kind :identical-request-twice
