@@ -1,0 +1,268 @@
+;; professional-role-observation.edn — bounded actor contract for
+;; observing PUBLIC first-party / official-registry statements of which
+;; professional role (fund-manager, general-partner, chief-compliance-
+;; officer, professional registration) is stated to be held at an
+;; organization, proposed to Hyakka (network-awai/app-hyakka) as
+;; auditable questions, never as a score, ranking or advice.
+;;
+;; Scope guard: this contract observes ROLE-NAMING EVENTS — "source S
+;; stated that the professional holding public registration id R holds
+;; professional role P at organization O at time T" — as source-backed
+;; claims only. It observes the professional-role plane, not a person:
+;; a professional is referenced only by a public professional
+;; registration identifier (CRD / IARD / official registry id). The
+;; contract carries PUBLIC PROFESSIONAL DATA ONLY
+;; (:public-professional-data-only) and structurally forbids personal
+;; contact data, home address, personal wealth, family data,
+;; sensitive-trait inference and reputation ranking
+;; (role-naming-is-not-personal-profiling). A stated role is a
+;; source's own statement; it is NOT verified competence, fitness,
+;; suitability, tenure, performance, endorsement or an employment
+;; fact. Worldwide coverage is a goal, never a completeness claim.
+;;
+;; The contract does not rank companies, funds, GPs, LPs or people, does
+;; not infer ownership stakes, control networks, personal wealth,
+;; returns or repudiation, and produces no investment advice. Every
+;; derived observation traces back to a source receipt by hash.
+;;
+;; Method version: v1 (2026-09-06). Any change to field semantics bumps
+;; :method/version and appends a :refresh/history entry; old
+;; observations are never silently reinterpreted.
+
+{:contract/id :professional-role-observation
+ :contract/version "1.0.0"
+ :method/version "professional-role-observation.v1"
+ :actor :cloud-itonami/app-public-fund
+ :proposes-to :network-awai/app-hyakka
+
+ ;; ── Measurement window ─────────────────────────────────────────────
+ ;; Half-open [from, until) in UTC ISO-8601 dates. "missing" inside a
+ ;; window means "not measured in this window", never "nothing changed".
+ :window
+ {:schema [:from :until :declared-at :timezone]
+  :format "YYYY-MM-DD"
+  :closed? false                       ; [from, until)
+  :rule :window-must-not-overlap-within-same-source-and-method}
+
+ ;; ── Source receipts ────────────────────────────────────────────────
+ ;; Every observation cites exactly one receipt, captured verbatim
+ ;; (bytes hash + fetch metadata) before any parsing. Role-naming
+ ;; statements are first-party (the fund's / manager's own registration
+ ;; or professional materials) or official regulator records
+ ;; (professional / securities registries); third-party reproductions
+ ;; may only DISCOVER, never back.
+ :source-receipt
+ {:schema [:receipt-id :source-url :source-class :source-language
+           :observed-at :content-hash :fetch-status]
+  :content-hash {:algo "sha256" :of "response-body-bytes"}
+  :source-class-allow #{:fund-first-party :manager-first-party
+                        :professional-first-party :official-company-registry
+                        :official-regulator}
+  :source-class-forbid #{:search-snippet :generated-summary :scraped-directory
+                         :social-post :broker-list :paywall-bypass
+                         :captcha-bypass :generated-role-list}
+  ;; discovery-only pointers can never back a derived observation.
+  :source-class-discovery-only #{:news-report :licensed-commercial-aggregator}
+  :fetch {:respect-robots? true :respect-auth-waf-captcha? true
+          :user-agent "app-public-fund-professional-role-observation/1.0"}}
+
+ ;; ── Receipt admission ──────────────────────────────────────────────
+ ;; A receipt whose fetch did not fully succeed backs no observation.
+ ;; It is still recorded (missing-is-unmeasured, never guessed), but it
+ ;; is flagged and excluded from the derived-observation basis.
+ :receipt-admission
+ {:rule :fetch-status-ok-required
+  :admissible-status #{:ok}
+  :else {:missingness-flag :fetch-status-non-ok
+         :refusal-record-required? true
+         :retro-invalidation? false
+         :backs-observation? false}}
+
+ ;; ── Event-level provenance ─────────────────────────────────────────
+ ;; Every role-naming event must cite a provenance chain of receipt ids
+ ;; that all exist in this contract's receipt set. An event with no
+ ;; traceable chain is unmeasured (:provenance-chain-incomplete), never
+ ;; inferred — a role claim that cannot be traced back is not carried
+ ;; forward as a role.
+ :event-provenance
+ {:required? true
+  :rule :every-event-cites-existing-receipts
+  :incomplete-flag :provenance-chain-incomplete}
+
+ ;; ── Typed entity/event inputs ──────────────────────────────────────
+ ;; Entity separation is a hard invariant: the professional-role plane,
+ ;; the professional (referenced by public registration id only), the
+ ;; fund vehicle, the management company and the organization are
+ ;; distinct entities even when they share a brand or a name
+ ;; (brand-is-not-legal-entity; professional-role-is-not-a-person).
+ ;;
+ ;; Privacy: a professional is carried ONLY as a public professional
+ ;; registration identifier (:crd / :iard / :official-registry-id) plus
+ ;; an entity id. Name / legal-name of a professional entity is
+ ;; structurally not required and never solicited — a source naming a
+ ;; role names the role, not the person behind it
+ ;; (never-a-person-identity).
+ :entity-types #{:professional-role :fund-manager :general-partner
+                 :professional :fund-vehicle :management-company
+                 :organization :jurisdiction}
+ :event-types #{:role-named
+                :role-holder-registration-referenced
+                :role-name-changed
+                :registry-recorded}
+ :entity-record
+ {:schema [:entity-id :entity-type :name :legal-name :jurisdiction
+           :identifier-class :identifier-value :source-receipt-id
+           :asserted-at :observed-at]
+  :invariant :one-entity-type-per-entity-id
+  :note "A brand string never auto-creates a legal entity; a professional
+         role is never carried as the person believed to hold it."}
+ :event-record
+ {:schema [:event-id :event-type :professional-role-entity-id
+           :organization-entity-id
+           :role {:kind [:one-of :fund-manager :general-partner
+                         :chief-compliance-officer :investment-adviser-representative
+                         :professional-registration :role-unstated]
+                  :as-stated-by-source? true}
+           :role-holder-registration-id      ; :crd / :iard / official id
+           :provenance-chain
+           :observed-at :asserted-at :source-receipt-id]
+  :invariants #{:role-naming-is-not-personal-profiling
+                :never-a-person-identity
+                :public-professional-data-only
+                :role-is-not-fitness-or-suitability
+                :role-is-not-employment-fact
+                :professional-role-organization-and-vehicle-are-distinct}}
+
+ ;; ── Professional-role epistemics ───────────────────────────────────
+ ;; The stated role is a source statement about a role, not an
+ ;; assessment of any person. Registration references are carried only
+ ;; when a source states them; a missing identifier is
+ ;; :identifier-unstated, never guessed. A role naming never hardens
+ ;; into a competence, fitness, suitability or employment claim. A
+ ;; source silence about a role inside a window is a coverage gap
+ ;; (:missing-is-unmeasured), never an absence of the role.
+ :professional-role-epistemics
+ {:rules #{:role-is-a-source-statement
+           :never-a-person-identity
+           :stamped-role-is-not-fitness-or-suitability
+           :stamped-role-is-not-employment-fact
+           :role-holder-referenced-by-public-registration-only
+           :missing-role-is-unmeasured-not-absence}}
+
+ ;; ── Missingness / coverage flags ───────────────────────────────────
+ :missingness
+ {:flags #{:no-receipt :receipt-unparseable :role-unstated
+           :organization-unstated :jurisdiction-unstated
+           :identifier-unstated :registration-id-unstated
+           :source-language-unmapped :first-party-source-conflict
+           :fetch-status-non-ok :provenance-chain-incomplete}
+  :rule :missing-is-unmeasured
+  :coverage-unit [:jurisdiction :source :language :year
+                  :identifier-class]
+  :coverage-record
+  {:schema [:coverage-unit :unit-key :observed-count :unmeasured-count
+            :window :method/version]}}
+
+ ;; ── Cross-source conflict ──────────────────────────────────────────
+ ;; Two allowed first-party or official sources may disagree about the
+ ;; same (professional-role, organization) naming in the same window.
+ ;; The conflict itself is an observation, never an adjudication: each
+ ;; side backs to its own receipt, both are carried, no winner is
+ ;; picked, and the disagreement is flagged wherever the pair appears
+ ;; downstream (missingness flag :first-party-source-conflict). A
+ ;; conflict never resolves into a competence, fitness, employment or
+ ;; personal-profiling claim.
+ :conflict-observation
+ {:schema [:conflict-id :window :professional-role-entity-id
+           :organization-entity-id :role-kind
+           :competing-source-receipt-ids :conflict-kind :observed-at
+           :resolution]
+  :conflict-kinds #{:named-vs-absent :role-disagreement
+                    :org-disagreement :registration-referral-disagreement}
+  :resolution :carry-both-never-resolve
+  :provenance :all-competing-receipt-ids
+  :derived-value :unmeasured
+  :no-winner-mechanism true
+  :invariants #{:conflict-is-observation-not-adjudication
+                :each-side-backs-to-its-own-receipt
+                :conflict-never-resolves-into-fitness-or-suitability
+                :disagreement-never-hardens-into-a-role
+                :role-is-not-a-person-profile}}
+
+ ;; ── Derived observation ────────────────────────────────────────────
+ ;; The only derived artifact is an observation of professional-role
+ ;; naming states within a window. No ranking, scoring, returns,
+ ;; ownership, control, suitability, fitness, employment, personal
+ ;; wealth or reputation field exists in this shape by construction.
+ :derived-observation
+ {:schema [:observation-id :method/version :window
+           :observation-kind :professional-role-entity-id
+           :organization-entity-id :event-id
+           :value {:kind [:one-of :role-stated-in-window
+                    :role-registration-referenced-in-window
+                    :role-state-count]
+                   :basis #{:receipt-only}}
+           :missingness-flags :provenance-chain :asserted-at]
+  :observation-kinds #{:professional-role-stated-in-window
+                       :registration-referenced-in-window
+                       :role-name-changed-in-window}
+  :forbidden-fields #{:person-name :person-identity
+                      :contact-data :home-address :personal-wealth
+                      :family-data :sensitive-trait-inference
+                      :reputation-rank :fitness :suitability
+                      :competence-score :employment-status
+                      :tenure :compensation :rank :score :centrality
+                      :returns :irr :moic :ownership-stake
+                      :control-percentage :recommendation
+                      :current-valuation}}
+
+ ;; ── Refresh history ────────────────────────────────────────────────
+ ;; Append-only. A re-observation of the same entity/window with a
+ ;; newer method version appends; it never edits prior entries. A role
+ ;; change is a NEW :role-name-changed observation plus a history
+ ;; entry — the earlier role observation is never overwritten or
+ ;; deleted.
+ :refresh-history
+ {:schema [:history-id :observation-id :re-observed-at
+           :reason {:kind [:one-of :window-advanced :source-updated
+                     :event-reclassified :registration-refetched
+                     :method-version-bumped]}
+           :changed-fields]
+  :append-only? true
+  :rule :reclassification-appends-does-not-overwrite}
+
+ ;; ── Hyakka proposal ────────────────────────────────────────────────
+ ;; Auditable QUESTIONS over the observation records, e.g. "which
+ ;; professional roles were stated by first-party / official sources
+ ;; to be held at organization O by the holder of public registration
+ ;; id R in window W, with receipts?" — each question carries its own
+ ;; coverage and missingness statement.
+ :hyakka-proposal
+ {:schema [:proposal-id :question-text :over-observation-kind
+           :window :coverage-record-ref :missingness-flags
+           :disclaimer]
+  :disclaimer
+  "Observations only. A stated professional role is a source's own
+   statement; it is not verified fitness, suitability, tenure,
+   performance, employment or endorsement, and never a personal
+   profile or reputation ranking. Public professional data only. No
+   investment advice."}
+
+ ;; ── Query / readback shape ─────────────────────────────────────────
+ ;; Deterministic readback: a question id + window returns observations
+ ;; plus the exact coverage statement that bounds them, or an explicit
+ ;; :unmeasured response. Unknown keys are rejected, not ignored.
+ :query-readback
+ {:request-schema [:query-id :observation-kind :window
+                   :filter {:keys #{:jurisdiction :professional-role-entity-id
+                                    :organization-entity-id :role-kind}}]
+  :response-schema [:query-id :status
+                    :observations [:observation-id]
+                    :coverage-record-ref
+                    :missingness-flags]
+  :status-values #{:ok :unmeasured :out-of-window}
+  :rule :readback-must-carry-coverage-and-missingness
+  :rules #{:role-kind-filter-matches-carried-role-exactly
+           :unstated-role-never-returned-under-a-role-filter
+           :unmeasured-is-not-zero
+           :readback-must-carry-coverage-and-missingness}}}

@@ -803,3 +803,69 @@ Verify deterministically (offline, no network):
 ```bash
 nbb tools/fund_vehicle_status_fixtures.cljs   # 11 fixtures
 ```
+
+
+## Professional-role observation contract (`professional-role-observation.edn`)
+
+`professional-role-observation.edn` (`professional-role-observation.v1`,
+2026-09-06) is a bounded actor contract for observing **publicly stated
+professional roles** -- "source S stated that the professional holder of
+public registration id R holds professional role P at organization O at
+time T" (fund-manager, general-partner, chief-compliance-officer,
+investment-adviser-representative, professional registration) -- as
+first-party or official-regulator/registry-backed, hash-backed claims,
+proposed to Hyakka as auditable questions.
+
+- The contract observes the **professional-role plane, not a person**
+  (`never-a-person-identity`): a professional is referenced only by a
+  public professional registration identifier (`:crd` / `:iard` /
+  `:official-registry-id`), never by name. `:person-name`,
+  `:person-identity`, `:contact-data`, `:home-address`, `:personal-wealth`,
+  `:family-data`, `:sensitive-trait-inference` and `:reputation-rank` are
+  forbidden derived fields by construction. It carries PUBLIC
+  PROFESSIONAL DATA ONLY (`:public-professional-data-only`).
+- A stated role is the source's own statement. It is **not** verified
+  fitness, suitability, tenure, performance, employment or endorsement,
+  and never a personal profile or reputation ranking
+  (`role-is-not-fitness-or-suitability`,
+  `role-is-not-employment-fact`,
+  `role-naming-is-not-personal-profiling`).
+- Roles are carried as the source's own word and never collapsed; an
+  unstated role is carried as `:role-unstated`, never guessed. An
+  unstated registration id is `:identifier-unstated`, never inferred
+  from a name or a directory.
+- Entity separation holds: the professional-role plane, the
+  professional, the fund vehicle, the management company and the
+  organization stay distinct even when they share a brand
+  (`professional-role-organization-and-vehicle-are-distinct`).
+- Only first-party (fund / manager / professional) and official
+  regulator / registry sources may back a derived observation; news
+  reports and licensed aggregators are discovery-only. Same guarantees
+  as the other contracts: sha256-backed verbatim receipts,
+  explicit fetch-status vocabulary with only `:ok` receipts admitted (a
+  refused admission produces a refusal record, never silence, and never
+  retro-invalidates; a re-fetch appends), required event-level
+  provenance chains, hard entity separation, half-open time-bounded
+  windows (`missing-is-unmeasured`), append-only refresh history
+  (registration re-fetch and event reclassification append, never
+  overwrite), forbidden rank/score/returns/ownership/fitness/suitability
+  fields absent by construction, questions-only Hyakka proposal, and a
+  strict readback (unknown filter keys answer `:rejected-filter`; a
+  `:role-kind` filter matches the carried kind exactly, so an
+  `:role-unstated` naming is never returned under a specific-role
+  filter; `:unmeasured` is not zero; every response carries coverage +
+  missingness).
+- **Cross-source conflict**: when two allowed sources disagree about the
+  same (professional-role, organization) naming in the same window, the
+  disagreement is carried as a `:conflict-observation` with both
+  receipts. Resolution is always `:carry-both-never-resolve` -- no
+  winner is picked, and a conflict never resolves into a fitness,
+  suitability or employment claim
+  (`conflict-never-resolves-into-fitness-or-suitability`,
+  `disagreement-never-hardens-into-a-role`, `role-is-not-a-person-profile`).
+
+Verify deterministically (offline, no network):
+
+```bash
+nbb tools/professional_role_observation_fixtures.cljs   # 12 fixtures
+```
