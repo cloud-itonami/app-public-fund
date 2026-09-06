@@ -182,8 +182,30 @@ No new derived fields are introduced; page bodies carry observation ids
 only (legal names, identifiers, amounts, receipt URLs resolve through
 the underlying contract's own readback).
 
+**v2 (`observation-readback.v2`, 2026-09-06)** — the serving plane carries
+the same receipt-admission and provenance-chain guarantees the content
+contracts enforce, so a page is never silently `:ok` on unverifiable
+backing:
+
+- **Receipt admission at serve time**: a page whose rows cite a backing
+  receipt whose fetch did not fully succeed is served `:unmeasured`
+  (`:empty-reason :backing-receipt-non-ok`), never `:ok`. A mixed page is
+  served `:unmeasured` as a whole — a non-admitted row is never silently
+  dropped to "make room", so a partial page cannot be mistaken for the
+  full answer. Readback never re-bases, re-verifies or repairs a receipt.
+- **Provenance-chain completeness**: a page whose rows carry an unresolved
+  chain (a cited receipt absent from the served contract's receipt set) is
+  `:unmeasured` (`:empty-reason :provenance-chain-incomplete`), matching
+  the `:provenance-chain-incomplete` flag the content contracts emit.
+- **Page citations**: served rows carry `:page-citations` as
+  `[observation-id, receipt-id]` pairs so a consumer can verify a page
+  traces to resolvable evidence without exposing source content; ids,
+  names, amounts and receipt URLs still resolve through the underlying
+  contract's own readback only.
+
 ```bash
 nbb tools/observation_readback_fixtures.cljs
+```
 ## Exit observation contract (`exit-observation.edn`)
 
 `exit-observation.edn` is a bounded actor contract for observing **exit
