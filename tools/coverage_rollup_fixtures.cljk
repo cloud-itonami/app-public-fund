@@ -3,12 +3,12 @@
 ;; coverage-rollup-observation contract
 ;; (`capital-observation/coverage-rollup-observation.edn`).
 ;;
-;; Exit codes mirror tools/capital_observation_fixtures.cljs:
+;; Exit codes mirror tools/capital_observation_fixtures.cljk:
 ;;   0  all fixtures ran and found nothing wrong
 ;;   1  a fixture ran and found a violation
 ;;   2  REFUSED — a fixture could not run
 ;;
-;; Usage: nbb tools/coverage_rollup_fixtures.cljs [path/to/contract.edn]
+;; Usage: nbb tools/coverage_rollup_fixtures.cljk [path/to/contract.edn]
 
 (ns coverage-rollup-fixtures
   (:require ["fs" :as fs]

@@ -39,7 +39,7 @@ cd app-public-fund
 ## 2. repo の主張を検算する（offline）
 
 ```bash
-nbb tools/verify.cljs
+nbb tools/verify.cljk
 ```
 
 これが実行する検査は 3 つ:
@@ -91,7 +91,7 @@ grep -oE "createRecord\('[^']+'" seed.ts | tr -d "'" | sed 's/createRecord(//' |
 ## 4. 書き込み先が生きているか測る（要ネットワーク）
 
 ```bash
-nbb tools/verify.cljs --preflight
+nbb tools/verify.cljk --preflight
 ```
 
 `--preflight` は **宣言された 4 host** を毎回引く（DNS → HTTP）。状態は 5 値で、
@@ -147,7 +147,7 @@ npx tsx seed.ts
 ```bash
 # (a) seed が要求する env 変数名を README 側でずらす
 sed -i '' 's/export etzhayyim_TOKEN=/export WRONG_TOKEN=/' README.md
-nbb tools/verify.cljs > /tmp/out.log; echo "exit=$?"   # → exit=1
+nbb tools/verify.cljk > /tmp/out.log; echo "exit=$?"   # → exit=1
 grep FINDING /tmp/out.log                              # → seed-env-var-documented
 git checkout README.md
 
@@ -155,25 +155,25 @@ git checkout README.md
 #     perl の s/// は /g が無いので **最初の 1 件だけ** 置換する。
 #     最初の出現は FUND_PROGRAMS の定義なので、参照 3 件が dangling になる。
 perl -0pi -e "s/programId: 'pf-health-access'/programId: 'pf-renamed'/" seed.ts
-nbb tools/verify.cljs > /tmp/out.log; echo "exit=$?"   # → exit=1
+nbb tools/verify.cljk > /tmp/out.log; echo "exit=$?"   # → exit=1
 grep FINDING /tmp/out.log                              # → seed-dangling-reference x3
 git checkout seed.ts
 
 # (e) 同じ collection に id を重複させる
 perl -0pi -e "s/pledgeId: 'plg-002'/pledgeId: 'plg-001'/" seed.ts
-nbb tools/verify.cljs > /tmp/out.log; echo "exit=$?"   # → exit=1
+nbb tools/verify.cljk > /tmp/out.log; echo "exit=$?"   # → exit=1
 grep FINDING /tmp/out.log                              # → seed-duplicate-id
 git checkout seed.ts
 
 # (c) 検査が走れない状態にする（pass ではなく REFUSED になること）
 mv seed.ts seed.ts.bak
-nbb tools/verify.cljs > /tmp/out.log; echo "exit=$?"   # → exit=2
+nbb tools/verify.cljk > /tmp/out.log; echo "exit=$?"   # → exit=2
 grep REFUSED /tmp/out.log
 mv seed.ts.bak seed.ts
 
 # (d) preflight の UNDECLARED が本当に見つけられるか（0 件が真の 0 か）
 printf '\nprobe: `nonexistent-host.example.com`\n' >> README.md
-nbb tools/verify.cljs --preflight > /tmp/out.log 2>&1
+nbb tools/verify.cljk --preflight > /tmp/out.log 2>&1
 grep -A2 UNDECLARED /tmp/out.log                       # → nonexistent-host.example.com
 git checkout README.md
 ```
@@ -194,5 +194,5 @@ git checkout README.md
 自分の壊し方を疑うこと。**
 
 ⚠ `$?` は pipe の**最後の**コマンドの終了値なので、
-`nbb tools/verify.cljs | grep FINDING; echo $?` は `grep` の値を読む。
+`nbb tools/verify.cljk | grep FINDING; echo $?` は `grep` の値を読む。
 上のように**先にファイルへ落として exit を採り、それから読む**。

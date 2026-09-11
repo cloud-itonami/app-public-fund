@@ -11,7 +11,7 @@
 ;;   1  a fixture found a violation
 ;;   2  REFUSED — the contract could not be read
 ;;
-;; Usage: nbb tools/award_claim_fixtures.cljs [path/to/contract.edn]
+;; Usage: nbb tools/award_claim_fixtures.cljk [path/to/contract.edn]
 
 (ns award-claim-fixtures
   (:require ["fs" :as fs]

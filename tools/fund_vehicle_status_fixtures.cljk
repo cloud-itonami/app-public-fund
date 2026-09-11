@@ -21,7 +21,7 @@
 ;;   * forbidden fields absent from the derived-observation shape
 ;;   * append-only refresh history
 ;;
-;; Run: nbb tools/fund_vehicle_status_fixtures.cljs
+;; Run: nbb tools/fund_vehicle_status_fixtures.cljk
 
 (ns fund-vehicle-status-fixtures
   (:require ["fs" :as fs]
