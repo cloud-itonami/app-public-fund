@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; observation_readback_fixtures.cljs — deterministic offline fixtures for
 ;; the observation-query-readback contract
 ;; (`capital-observation/observation-query-readback.edn`).

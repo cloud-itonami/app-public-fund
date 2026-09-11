@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; fund_term_vintage_fixtures.cljs — deterministic offline fixture runner
 ;; for the fund-term-and-vintage-observation.v1 contract
 ;; (capital-observation/fund-term-and-vintage-observation.edn). No network.
@@ -26,7 +26,7 @@
 ;;   * forbidden fields absent from the derived-observation shape
 ;;   * append-only refresh history
 ;;
-;; Run: nbb tools/fund_term_vintage_fixtures.cljk
+;; Run: kbb --backend sci tools/fund_term_vintage_fixtures.cljk
 
 (ns fund-term-vintage-fixtures
   (:require ["fs" :as fs]

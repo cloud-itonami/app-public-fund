@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; fund_vehicle_status_fixtures.cljs — deterministic offline fixture
 ;; runner for the fund-vehicle-status-observation.v1 contract
 ;; (capital-observation/fund-vehicle-status-observation.edn). No network.
@@ -21,7 +21,7 @@
 ;;   * forbidden fields absent from the derived-observation shape
 ;;   * append-only refresh history
 ;;
-;; Run: nbb tools/fund_vehicle_status_fixtures.cljk
+;; Run: kbb --backend sci tools/fund_vehicle_status_fixtures.cljk
 
 (ns fund-vehicle-status-fixtures
   (:require ["fs" :as fs]

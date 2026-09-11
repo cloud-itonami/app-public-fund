@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; financing_round_fixtures.cljs — deterministic offline fixtures for the
 ;; financing-round-observation contract
 ;; (`capital-observation/financing-round-observation.edn`).
@@ -11,7 +11,7 @@
 ;;   1  a fixture ran and found a violation
 ;;   2  REFUSED — a fixture could not run
 ;;
-;; Usage: nbb tools/financing_round_fixtures.cljk [path/to/contract.edn]
+;; Usage: kbb --backend sci tools/financing_round_fixtures.cljk [path/to/contract.edn]
 
 (ns financing-round-fixtures
   (:require ["fs" :as fs]

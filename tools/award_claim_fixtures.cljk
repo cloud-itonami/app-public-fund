@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; award_claim_fixtures.cljs — deterministic offline fixtures for the
 ;; award-claim-pipeline contract (`award-claim/award-claim-pipeline.edn`).
 ;;
@@ -11,7 +11,7 @@
 ;;   1  a fixture found a violation
 ;;   2  REFUSED — the contract could not be read
 ;;
-;; Usage: nbb tools/award_claim_fixtures.cljk [path/to/contract.edn]
+;; Usage: kbb --backend sci tools/award_claim_fixtures.cljk [path/to/contract.edn]
 
 (ns award-claim-fixtures
   (:require ["fs" :as fs]

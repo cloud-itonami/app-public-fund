@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; source_receipt_refresh_fixtures.cljs — deterministic offline fixtures for the
 ;; source-receipt-refresh-observation contract
 ;; (`capital-observation/source-receipt-refresh-observation.edn`).
@@ -13,7 +13,7 @@
 ;;   1  a fixture ran and found a violation
 ;;   2  REFUSED — a fixture could not run
 ;;
-;; Usage: nbb tools/source_receipt_refresh_fixtures.cljk [path/to/contract.edn]
+;; Usage: kbb --backend sci tools/source_receipt_refresh_fixtures.cljk [path/to/contract.edn]
 ;;
 ;; v2 (2026-09-03): fetch-status admission gate (only :ok receipts enter
 ;; the verification cycle), required verification-level provenance

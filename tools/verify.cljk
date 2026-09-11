@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; verify.cljs — offline checks that this repo's entry documents still describe
 ;; the repo that is actually here.
 ;;
@@ -10,8 +10,8 @@
 ;; command, so it is checked here instead of trusted.
 ;;
 ;; Usage:
-;;   nbb tools/verify.cljk              # offline checks only (deterministic)
-;;   nbb tools/verify.cljk --preflight  # also probe the hosts the docs name
+;;   kbb --backend sci tools/verify.cljk              # offline checks only (deterministic)
+;;   kbb --backend sci tools/verify.cljk --preflight  # also probe the hosts the docs name
 ;;
 ;; Exit codes are three-valued on purpose. A check that could not run must not
 ;; return the same value as a check that ran and found nothing:
@@ -70,7 +70,7 @@
 
 (defn- refs-in [text]
   ;; Backticks hold both bare paths (`docs/x.md`) and whole commands
-  ;; (`nbb tools/verify.cljk`), so every whitespace-separated token is tested
+  ;; (`kbb --backend sci tools/verify.cljk`), so every whitespace-separated token is tested
   ;; rather than the span as a whole. Testing the span would miss the path
   ;; inside a command — which is exactly the shape the stale seed command had.
   (into #{}

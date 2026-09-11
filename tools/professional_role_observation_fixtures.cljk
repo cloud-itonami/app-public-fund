@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; professional_role_observation_fixtures.cljs — deterministic offline
 ;; fixture runner for the professional-role-observation.v2 contract
 ;; (capital-observation/professional-role-observation.edn). No network.
@@ -24,7 +24,7 @@
 ;;   * append-only refresh history; role change appends, never overwrites
 ;;   * coverage record and Hyakka questions-only proposal present
 ;;
-;; Run: nbb tools/professional_role_observation_fixtures.cljk
+;; Run: kbb --backend sci tools/professional_role_observation_fixtures.cljk
 
 (ns professional-role-observation-fixtures
   (:require ["fs" :as fs]

@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; capital_observation_fixtures.cljs — deterministic offline fixtures for the
 ;; fund-close-observation contract (`capital-observation/fund-close-observation.edn`).
 ;;
@@ -11,7 +11,7 @@
 ;; admission, identifier-based entity separation, and record-never-resolve
 ;; receipt disagreement handling.
 ;;
-;; Usage: nbb tools/capital_observation_fixtures.cljk [path/to/contract.edn]
+;; Usage: kbb --backend sci tools/capital_observation_fixtures.cljk [path/to/contract.edn]
 
 (ns capital-observation-fixtures
   (:require ["fs" :as fs]
