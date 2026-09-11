@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; lp_commitment_fixtures.cljs — deterministic offline fixtures for the
 ;; lp-commitment-observation contract
 ;; (`capital-observation/lp-commitment-observation.edn`).
@@ -8,7 +8,7 @@
 ;;   1  a fixture ran and found a violation
 ;;   2  REFUSED — a fixture could not run
 ;;
-;; Usage: nbb tools/lp_commitment_fixtures.cljk [path/to/contract.edn]
+;; Usage: kbb --backend sci tools/lp_commitment_fixtures.cljk [path/to/contract.edn]
 
 (ns lp-commitment-fixtures
   (:require ["fs" :as fs]

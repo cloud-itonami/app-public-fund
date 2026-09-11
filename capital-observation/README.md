@@ -15,7 +15,7 @@ as auditable questions — never as scores, rankings or advice.
   admission, provenance chains on every event, disagreement recorded
   never resolved, and strict readback (unmapped word never returned
   under a code filter). A stated naming is not a verified registration
-  or tax posture. Fixtures: `nbb tools/fund_domicile_fixtures.cljk`.
+  or tax posture. Fixtures: `kbb --backend sci tools/fund_domicile_fixtures.cljk`.
 
 
 ## listing-pace-observation.edn
@@ -56,7 +56,7 @@ v2 additions (2026-09-05):
 Verify v2 deterministically (offline, no network):
 
 ```bash
-nbb tools/listing_pace_v2_fixtures.cljk
+kbb --backend sci tools/listing_pace_v2_fixtures.cljk
 ```
 ## fund-close-observation.edn
 
@@ -110,7 +110,7 @@ Amounts are carried with their stated kind (target vs first close vs final
 close) and are never collapsed.
 
 ```bash
-nbb tools/capital_observation_fixtures.cljk
+kbb --backend sci tools/capital_observation_fixtures.cljk
 ```
 
 ## LP-commitment observation (`lp-commitment-observation.v2`)
@@ -138,7 +138,7 @@ What it adds beyond fund-close:
 Verify deterministically (offline, no network):
 
 ```bash
-nbb tools/lp_commitment_fixtures.cljk
+kbb --backend sci tools/lp_commitment_fixtures.cljk
 ```
 
 Exit codes: `0` all fixtures ran clean · `1` a violation was found ·
@@ -167,7 +167,7 @@ v2 additions (2026-09-02):
 Verify v2 deterministically (offline, no network):
 
 ```bash
-nbb tools/lp_commitment_v2_fixtures.cljk
+kbb --backend sci tools/lp_commitment_v2_fixtures.cljk
 ```
 
 ## Readback pagination (`observation-query-readback.edn`)
@@ -204,7 +204,7 @@ backing:
   contract's own readback only.
 
 ```bash
-nbb tools/observation_readback_fixtures.cljk
+kbb --backend sci tools/observation_readback_fixtures.cljk
 ```
 ## Exit observation contract (`exit-observation.edn`)
 
@@ -281,8 +281,8 @@ proposed to Hyakka as auditable questions.
 Verify deterministically (offline, no network):
 
 ```bash
-nbb tools/exit_observation_fixtures.cljk
-nbb tools/portfolio_listing_fixtures.cljk
+kbb --backend sci tools/exit_observation_fixtures.cljk
+kbb --backend sci tools/portfolio_listing_fixtures.cljk
 ```
 ## Coverage rollup contract
 
@@ -306,7 +306,7 @@ unmeasured; both are cited in `:excluded-inputs` with their flag
 visible, never a silent drop.
 
 ```bash
-nbb tools/coverage_rollup_fixtures.cljk
+kbb --backend sci tools/coverage_rollup_fixtures.cljk
 ```
 
 
@@ -345,7 +345,7 @@ as auditable questions.
 Verify deterministically (offline, no network):
 
 ```bash
-nbb tools/manager_affiliation_fixtures.cljk
+kbb --backend sci tools/manager_affiliation_fixtures.cljk
 ```
 
 v2 additions (2026-09-03):
@@ -392,7 +392,7 @@ epistemic boundaries enforced by construction:
   bypass classes are forbidden.
 
 ```bash
-nbb tools/financing_round_fixtures.cljk
+kbb --backend sci tools/financing_round_fixtures.cljk
 ```
 
 v2 additions (2026-09-03):
@@ -466,7 +466,7 @@ v2 additions (2026-09-02):
 Verify deterministically (offline, no network):
 
 ```bash
-nbb tools/round_participant_fixtures.cljk
+kbb --backend sci tools/round_participant_fixtures.cljk
 ```
 
 ## Co-investment adjacency observation contract (`co-investment-observation.edn`)
@@ -572,7 +572,7 @@ auditable questions.
 Verify deterministically (offline, no network):
 
 ```bash
-nbb tools/fund_service_provider_fixtures.cljk   # 17 fixtures (v2)
+kbb --backend sci tools/fund_service_provider_fixtures.cljk   # 17 fixtures (v2)
 ```
 
 ## Source receipt refresh observation contract (`source-receipt-refresh-observation.edn`)
@@ -609,8 +609,8 @@ questions. It observes evidence records, not markets, funds or companies.
 Verify deterministically (offline, no network):
 
 ```bash
-nbb tools/co_investment_fixtures.cljk
-nbb tools/source_receipt_refresh_fixtures.cljk
+kbb --backend sci tools/co_investment_fixtures.cljk
+kbb --backend sci tools/source_receipt_refresh_fixtures.cljk
 ```
 
 ## Regulator registration observation contract (`regulator-registration-observation.edn`)
@@ -642,7 +642,7 @@ proposed to Hyakka as auditable questions.
 Verify deterministically (offline, no network):
 
 ```bash
-nbb tools/regulator_registration_fixtures.cljk
+kbb --backend sci tools/regulator_registration_fixtures.cljk
 ```
 ## LP-commitment observation (`lp-commitment-observation.v1`)
 (`fund-service-provider-observation.v2`; v1 was 2026-09-04) is a bounded
@@ -660,7 +660,7 @@ actor contract for
   key answers `:rejected-filter` instead of being ignored, and a
   `:provider-role` filter matches the carried role exactly, so an
   `:unstated` role is never returned under a specific-role filter.
-nbb tools/fund_service_provider_fixtures.cljk   # 18 fixtures (v2)
+kbb --backend sci tools/fund_service_provider_fixtures.cljk   # 18 fixtures (v2)
 (`coverage-rollup-observation.v1`) is a compositional contract that
 ## Startup status observation contract (`startup-observation.edn`)
 `startup-observation.edn` (`startup-observation.v1`) is a bounded actor
@@ -689,7 +689,7 @@ registry- or first-party-backed, hash-backed claims, proposed to Hyakka
   rank/score/success-likelihood/growth-rate/valuation/returns/ownership/
   suitability fields by construction, questions-only Hyakka proposal,
   and a deterministic readback that always carries coverage +
-nbb tools/startup_observation_fixtures.cljs
+kbb --backend sci tools/startup_observation_fixtures.cljk
 ## Fund investment focus observation contract (`fund-investment-focus-observation.edn`)
 `fund-investment-focus-observation.edn` is a bounded actor contract for
 observing **stated fund investment focus** — "source S stated that fund
@@ -716,7 +716,7 @@ value V as of time T" — as first-party or registry/securities-filing-backed,
   cross-source conflict carried as `:conflict-observation` with
   `:carry-both-never-resolve`, append-only refresh history, no
   rank/score/allocation/portfolio-composition/returns/health/
-nbb tools/fund_investment_focus_fixtures.cljs
+kbb --backend sci tools/fund_investment_focus_fixtures.cljk
 ## Fund term and vintage observation contract (`fund-term-and-vintage-observation.edn`)
 `fund-term-and-vintage-observation.edn` is a bounded actor contract for
 observing **stated fund lifecycle dates** — "source S stated that fund
@@ -748,7 +748,7 @@ Hyakka as auditable questions.
 Verify deterministically (offline, no network):
 
 ```bash
-nbb tools/fund_term_vintage_fixtures.cljk   # 12 fixtures (v1)
+kbb --backend sci tools/fund_term_vintage_fixtures.cljk   # 12 fixtures (v1)
 ```
 ## Valuation estimate observation contract (`valuation-estimate-observation.edn`)
 `valuation-estimate-observation.edn` is a bounded actor contract for
@@ -784,7 +784,7 @@ time T, with basis B" — as source-backed claims, proposed to Hyakka as
   overwrites), no rank/score fields by construction, questions-only
   Hyakka proposal, and a deterministic readback that always carries
   coverage + missingness.
-nbb tools/valuation_estimate_fixtures.cljs
+kbb --backend sci tools/valuation_estimate_fixtures.cljk
 
 ## Fund-vehicle status observation contract (`fund-vehicle-status-observation.edn`)
 
@@ -837,7 +837,7 @@ hash-backed claims, proposed to Hyakka as auditable questions.
 Verify deterministically (offline, no network):
 
 ```bash
-nbb tools/fund_vehicle_status_fixtures.cljk   # 11 fixtures
+kbb --backend sci tools/fund_vehicle_status_fixtures.cljk   # 11 fixtures
 ```
 
 
@@ -916,5 +916,5 @@ contract carries:
 Verify deterministically (offline, no network):
 
 ```bash
-nbb tools/professional_role_observation_fixtures.cljk   # 12 fixtures
+kbb --backend sci tools/professional_role_observation_fixtures.cljk   # 12 fixtures
 ```

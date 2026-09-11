@@ -8,7 +8,7 @@
 ;; override exists for the negative check (run against the v1 contract,
 ;; it must report failures and exit 1).
 ;;
-;; Run: nbb tools/manager_affiliation_fixtures.cljk
+;; Run: kbb --backend sci tools/manager_affiliation_fixtures.cljk
 
 (ns manager-affiliation-fixtures
   (:require [clojure.edn :as edn]

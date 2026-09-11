@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; fund_domicile_fixtures.cljs — deterministic offline fixture runner
 ;; for the fund-domicile-observation.v1 contract
 ;; (capital-observation/fund-domicile-observation.edn). No network.
@@ -23,7 +23,7 @@
 ;;   * forbidden fields absent from the derived-observation shape
 ;;   * append-only refresh history
 ;;
-;; Run: nbb tools/fund_domicile_fixtures.cljk
+;; Run: kbb --backend sci tools/fund_domicile_fixtures.cljk
 
 (ns fund-domicile-fixtures
   (:require ["fs" :as fs]

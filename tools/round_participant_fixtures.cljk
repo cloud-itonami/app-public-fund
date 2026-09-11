@@ -6,7 +6,7 @@
 ;; v2 (2026-09-02): adds fixtures for fetch-status admission (a non-ok
 ;; receipt backs nothing) and event-level provenance chains.
 ;;
-;; Run: nbb tools/round_participant_fixtures.cljk
+;; Run: kbb --backend sci tools/round_participant_fixtures.cljk
 
 (ns round-participant-fixtures
   (:require [clojure.edn :as edn]

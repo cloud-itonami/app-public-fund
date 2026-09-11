@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; co_investment_fixtures.cljs — deterministic offline fixtures for the
 ;; co-investment-observation contract
 ;; (capital-observation/co-investment-observation.edn).
@@ -8,7 +8,7 @@
 ;;   1  a fixture ran and found a violation
 ;;   2  REFUSED — a fixture could not run
 ;;
-;; Usage: nbb tools/co_investment_fixtures.cljk [path/to/contract.edn]
+;; Usage: kbb --backend sci tools/co_investment_fixtures.cljk [path/to/contract.edn]
 ;;
 ;; v2 (2026-09-04): fetch-status admission gate, required event-level
 ;; provenance chains, and strict readback (unknown filter keys rejected,

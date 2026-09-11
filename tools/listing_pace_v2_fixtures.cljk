@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; listing_pace_v2_fixtures.cljs — deterministic offline fixtures for the
 ;; listing-pace-observation contract v2 hardening
 ;; (`capital-observation/listing-pace-observation.edn`).
@@ -8,7 +8,7 @@
 ;;   1  a fixture ran and found a violation
 ;;   2  REFUSED — a fixture could not run
 ;;
-;; Usage: nbb tools/listing_pace_v2_fixtures.cljk [path/to/contract.edn]
+;; Usage: kbb --backend sci tools/listing_pace_v2_fixtures.cljk [path/to/contract.edn]
 
 (ns listing-pace-v2-fixtures
   (:require ["fs" :as fs]

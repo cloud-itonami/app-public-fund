@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; fund_service_provider_fixtures.cljs — deterministic offline fixtures for the
 ;; fund-service-provider-observation contract
 ;; (`capital-observation/fund-service-provider-observation.edn`).
@@ -8,7 +8,7 @@
 ;;   1  a fixture ran and found a violation
 ;;   2  REFUSED — a fixture could not run
 ;;
-;; Usage: nbb tools/fund_service_provider_fixtures.cljk [path/to/contract.edn]
+;; Usage: kbb --backend sci tools/fund_service_provider_fixtures.cljk [path/to/contract.edn]
 ;;
 ;; v2 (2026-09-05): mirrors the co-investment v2 hardening — fetch-status
 ;; admission gate (only :ok backs a naming; refusal is a RECORD, never

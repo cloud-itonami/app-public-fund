@@ -11,7 +11,7 @@
 ;;   * :fetch-status-non-ok receipt backs no derived observation
 ;;   * discovery-only source classes appear in NO provenance chain
 ;;
-;; Run: nbb tools/lp_commitment_v2_fixtures.cljk
+;; Run: kbb --backend sci tools/lp_commitment_v2_fixtures.cljk
 
 (ns lp-commitment-v2-fixtures
   (:require [clojure.edn :as edn]
