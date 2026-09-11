@@ -26,7 +26,7 @@
 ;;   * forbidden fields absent from the derived-observation shape
 ;;   * append-only refresh history
 ;;
-;; Run: nbb tools/fund_term_vintage_fixtures.cljs
+;; Run: nbb tools/fund_term_vintage_fixtures.cljk
 
 (ns fund-term-vintage-fixtures
   (:require ["fs" :as fs]

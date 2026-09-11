@@ -3,12 +3,12 @@
 ;; the portfolio-listing-observation contract
 ;; (`capital-observation/portfolio-listing-observation.edn`).
 ;;
-;; Exit codes mirror tools/verify.cljs:
+;; Exit codes mirror tools/verify.cljk:
 ;;   0  all fixtures ran and found nothing wrong
 ;;   1  a fixture ran and found a violation
 ;;   2  REFUSED — a fixture could not run
 ;;
-;; Usage: nbb tools/portfolio_listing_fixtures.cljs [path/to/contract.edn]
+;; Usage: nbb tools/portfolio_listing_fixtures.cljk [path/to/contract.edn]
 ;;
 ;; v2 (2026-09-04): fetch-status admission gate, required event-level
 ;; provenance chains, and strict readback (unknown filter keys rejected,

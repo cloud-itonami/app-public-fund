@@ -9,7 +9,7 @@
 ;;   * :receipt-disagreement is RECORDED, never resolved
 ;;   * :fetch-status-non-ok receipt backs no derived observation
 ;;
-;; Run: nbb tools/fund_close_observation_fixtures.cljs
+;; Run: nbb tools/fund_close_observation_fixtures.cljk
 
 (ns fund-close-fixtures
   (:require [clojure.edn :as edn]

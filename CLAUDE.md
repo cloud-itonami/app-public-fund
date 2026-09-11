@@ -3,7 +3,7 @@
 この repo は `etzhayyim/root` monorepo から抽出されたもの（`migration.edn`、`:status :extracted`）。
 下記の `60-apps/…` / `70-tools/…` は抽出前の monorepo を指しており、**この repo には存在しない**。
 消さずに残しているのは、後継が特定できていない（UNRESOLVED であって不在ではない）ため。
-`nbb tools/verify.cljs` が、この 3 件を「未解決として明示的に許可した参照」として毎回列挙する。
+`nbb tools/verify.cljk` が、この 3 件を「未解決として明示的に許可した参照」として毎回列挙する。
 
 - 共通ルール: `60-apps/CLAUDE.md` / `70-tools/CLAUDE.md` — 抽出前 monorepo の共有ルール。この repo に等価物は無い
 

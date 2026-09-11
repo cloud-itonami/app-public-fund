@@ -24,7 +24,7 @@
 ;;   * append-only refresh history; role change appends, never overwrites
 ;;   * coverage record and Hyakka questions-only proposal present
 ;;
-;; Run: nbb tools/professional_role_observation_fixtures.cljs
+;; Run: nbb tools/professional_role_observation_fixtures.cljk
 
 (ns professional-role-observation-fixtures
   (:require ["fs" :as fs]

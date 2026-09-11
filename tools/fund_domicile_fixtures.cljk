@@ -23,7 +23,7 @@
 ;;   * forbidden fields absent from the derived-observation shape
 ;;   * append-only refresh history
 ;;
-;; Run: nbb tools/fund_domicile_fixtures.cljs
+;; Run: nbb tools/fund_domicile_fixtures.cljk
 
 (ns fund-domicile-fixtures
   (:require ["fs" :as fs]

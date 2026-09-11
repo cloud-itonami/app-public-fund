@@ -6,12 +6,12 @@
 ;; v2 (2026-09-03): adds fetch-status admission, event-level provenance,
 ;; and receipt-disagreement (recorded, never resolved) fixtures.
 ;;
-;; Exit codes mirror tools/verify.cljs:
+;; Exit codes mirror tools/verify.cljk:
 ;;   0  all fixtures ran and found nothing wrong
 ;;   1  a fixture ran and found a violation
 ;;   2  REFUSED — a fixture could not run
 ;;
-;; Usage: nbb tools/financing_round_fixtures.cljs [path/to/contract.edn]
+;; Usage: nbb tools/financing_round_fixtures.cljk [path/to/contract.edn]
 
 (ns financing-round-fixtures
   (:require ["fs" :as fs]

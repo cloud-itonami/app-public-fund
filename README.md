@@ -9,7 +9,7 @@
 > 実装は抽出元 monorepo か別 repo に在り、ここには来ていない。
 >
 > 下に並ぶドメイン・API・台帳は**設計上の宛先**であって、現在の稼働状態ではない。
-> 生死は `nbb tools/verify.cljs --preflight` で測る。手順は
+> 生死は `nbb tools/verify.cljk --preflight` で測る。手順は
 > [`docs/operator-quickstart.md`](docs/operator-quickstart.md)。
 
 - 公開ドメイン: `pb.etzhayyim.com`
@@ -50,7 +50,7 @@ npx tsx seed.ts
 応答しない状態で走らせると、途中まで書けた dataset が残る。
 
 ```bash
-nbb tools/verify.cljs --preflight    # docs の整合 + 宛先ホストの生死
+nbb tools/verify.cljk --preflight    # docs の整合 + 宛先ホストの生死
 ```
 
 2026-08-29 の実測では `pb.etzhayyim.com` と `credits.etzhayyim.com` が
