@@ -33,9 +33,9 @@
 ;; becomes a place where findings go to die. Each entry records what was
 ;; actually checked, so the next reader can re-check rather than re-trust.
 (def unresolved-references
-  {"60-apps/CLAUDE.md"
+  {"60-apps/AGENTS.md"
    "Shared rules file of the pre-extraction etzhayyim/root monorepo. No equivalent exists in this repo."
-   "70-tools/CLAUDE.md"
+   "70-tools/AGENTS.md"
    "Shared rules file of the pre-extraction etzhayyim/root monorepo. No equivalent exists in this repo."
    "60-apps/etzhayyim-project-well-becoming/90-docs/260315-child-capability-agents-design.md"
    (str "Cross-project design doc from the monorepo. Searched for a successor on 2026-08-29 and did not find one: "

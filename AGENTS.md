@@ -5,7 +5,7 @@
 消さずに残しているのは、後継が特定できていない（UNRESOLVED であって不在ではない）ため。
 `kbb --backend sci tools/verify.cljk` が、この 3 件を「未解決として明示的に許可した参照」として毎回列挙する。
 
-- 共通ルール: `60-apps/CLAUDE.md` / `70-tools/CLAUDE.md` — 抽出前 monorepo の共有ルール。この repo に等価物は無い
+- 共通ルール: `60-apps/AGENTS.md` / `70-tools/AGENTS.md` — 抽出前 monorepo の共有ルール。この repo に等価物は無い
 
 ## Overview
 
